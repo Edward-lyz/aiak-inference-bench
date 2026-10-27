@@ -1,58 +1,48 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light" />
-    <title>AIAK · Inference Bench</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <aside>
-      <a class="brand" href="./"><span class="brand-mark">a</span><span>AIAK<span class="brand-sub">INFERENCE BENCH</span></span></a>
-      <span class="nav-label">WORKSPACE</span>
-      <a class="nav active" href="./"><span>◈</span> 容量基准 <span class="nav-dot"></span></a>
-      <button class="nav" id="method-button"><span>◎</span> 测量方法</button>
-      <div class="side-note"><span class="live-dot"></span> B200 · 8 GPU<br /><small>Private benchmark workspace</small></div>
-    </aside>
-    <main>
-      <header>
-        <span class="breadcrumb">Benchmarks <span>/</span> Engine comparison</span>
-        <div class="header-actions"><span class="private-tag">INTERNAL</span><button id="refresh" class="icon-button" aria-label="刷新结果">↻</button></div>
-      </header>
-      <section class="intro">
-        <div><div class="eyebrow">SGLANG × AIAK_SGLANG</div><h1>让吞吐差异清晰可见<span>.</span></h1><p>相同模型、相同负载，比较已扫描范围内的容量。</p></div>
-        <div class="intro-actions"><label class="button secondary" for="import-file">导入结果 <span>↗</span></label><input id="import-file" type="file" accept=".json" hidden /><button class="button" id="download">下载 JSON <span>↓</span></button></div>
-      </section>
-      <div class="notice"><span class="notice-symbol">i</span><div><strong>吞吐优先，无延迟门槛。</strong> TTFT / TPOT 同步记录。Smoke 与未通过稳定性验证的点不参与容量排名。</div></div>
-      <section class="filters" aria-label="测试条件">
-        <div class="phase-switch" aria-label="阶段"><button data-phase="P" class="selected">P <span>Prefill</span></button><button data-phase="D">D <span>Decode</span></button></div>
-        <label>MODEL<select id="model"><option>等待结果</option></select></label>
-        <label>CONTEXT<select id="context"><option>—</option></select></label>
-        <label>PROFILE<select id="profile"><option value="capacity">Capacity</option><option value="smoke">Smoke · 链路验证</option></select></label>
-        <label class="comparison-filter">COMPARISON GROUP<select id="comparison"><option>—</option></select></label>
-      </section>
-      <div class="phase-note" id="phase-note">P · 集中式服务，固定输入、输出 1 token、关闭 prefix cache。</div>
-      <section class="metrics">
-        <article class="metric-card"><div class="card-label"><span class="engine-dot community"></span> Community SGLang <span class="badge">NIGHTLY</span></div><div class="metric-value" id="community-value">—</div><div class="metric-foot" id="community-foot">等待合格的容量结果</div></article>
-        <article class="metric-card"><div class="card-label"><span class="engine-dot aiak"></span> AIAK SGLang <span class="badge green">RELEASE</span></div><div class="metric-value" id="aiak-value">—</div><div class="metric-foot" id="aiak-foot">等待合格的容量结果</div></article>
-        <article class="metric-card ratio-card"><div class="card-label">相同条件下的吞吐比 <span class="ratio-symbol">↗</span></div><div class="metric-value" id="ratio-value">—</div><div class="metric-foot" id="ratio-foot">两套引擎均通过稳定性验证后显示</div></article>
-      </section>
-      <section class="chart-panel">
-        <div class="panel-heading"><div><h2>负载与吞吐</h2><p id="chart-subtitle">输入吞吐 · tokens / second</p></div><div class="legend"><span><i class="community"></i>Community</span><span><i class="aiak"></i>AIAK</span></div></div>
-        <div id="chart" aria-label="并发与吞吐曲线"></div>
-        <div class="empty-chart" id="empty"><div class="empty-symbol">⌁</div><h3>这里等待第一条真实曲线</h3><p>触发测试或导入 summary.json。未运行的测试不会显示演示数值。</p></div>
-        <div class="chart-caption"><span id="scope">扫描上限与实测范围会随结果显示</span><span>实线：合格容量 · 虚线：未验证 / Smoke</span></div>
-      </section>
-      <section class="table-panel">
-        <div class="panel-heading"><div><h2>测试明细 <span id="point-count">0</span></h2><p>保留每次重复、失败与未完成的记录</p></div><button class="text-button" id="download-csv">导出 CSV ↓</button></div>
-        <div class="table-scroll"><table><thead><tr><th>引擎 / 版本</th><th>并发</th><th>吞吐 tok/s</th><th>稳态 s</th><th>TTFT ms</th><th>TPOT ms</th><th>状态</th><th>运行 / 重复</th></tr></thead><tbody id="rows"></tbody></table></div>
-        <div class="table-empty" id="table-empty">暂无测试记录</div>
-      </section>
-      <footer><span id="update-time">尚未加载结果</span><span>Native SGLang benchmark · MTP off · Cache off</span></footer>
-      <div id="error" role="alert" hidden></div>
-    </main>
-    <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><div class="eyebrow">MEASUREMENT NOTES</div><h2>每个数字都有明确边界</h2><p>P 报告输入 tokens/s；D 使用原生 fake KV 模式，报告客户端实测输出 tokens/s，保留真实专家路由。合成 D 只代表单压容量。</p><p>全部测试使用同一个固定版本的社区原生 benchmark 客户端。稳态由其提取：并发至少达到峰值 80% 的最长连续区间。</p><p>容量资格：至少 3 次独立重复，每次稳态 ≥120 秒，平均并发 ≥目标的 80%，重复吞吐 CV ≤5%，请求全部成功。这里的 CV 是跨重复波动。</p><p>吞吐比仅在同一比较组、同一运行中计算。不同权重、客户端版本、精度、负载或硬件条件不会混合计算。扫描上限仍可能限制峰值。</p><p>所有延迟均为描述性指标，不作 SLO 门槛。原始证据留在内网，不随网页上传到 GitHub。</p></dialog>
-    <script type="module" src="./app.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <title>Inference Bench</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <aside>
+    <a class="brand" href="./">▧ <span>Inference Bench</span></a>
+    <nav><a class="nav active" href="./">测试结果</a><button class="nav" id="method-button">测量口径</button></nav>
+  </aside>
+  <main>
+    <header><span>测试结果</span><button id="refresh" aria-label="刷新结果">↻ 刷新</button></header>
+    <section class="intro"><h1>SGLang 吞吐对比</h1><div class="actions"><label class="button" for="import-file">导入 JSON</label><input id="import-file" type="file" accept=".json" hidden /><button class="button" id="download">导出 JSON ↗</button></div></section>
+    <section class="filters" aria-label="测试条件">
+      <div class="phase-switch"><button data-phase="P" class="selected">Prefill</button><button data-phase="D">Decode</button></div>
+      <label>模型<select id="model"><option>—</option></select></label>
+      <label>输入长度<select id="context"><option>—</option></select></label>
+      <label>测试类型<select id="profile"><option value="capacity">容量</option><option value="smoke">Smoke</option></select></label>
+      <label>比较条件<select id="comparison"><option>—</option></select></label>
+      <label>运行<select id="run"><option>—</option></select></label>
+    </section>
+    <dl class="conditions"><div><dt>KV</dt><dd id="kv-mode">真实</dd></div><div><dt>专家路由</dt><dd>真实</dd></div><div><dt>MTP</dt><dd>关闭</dd></div><div><dt>Prefix cache</dt><dd>关闭</dd></div><div><dt>延迟门槛</dt><dd>无</dd></div></dl>
+    <section class="metrics" id="metrics">
+      <article><h2>Community · 合格峰值</h2><div class="metric-value" id="community-value">—</div></article>
+      <article><h2>AIAK · 合格峰值</h2><div class="metric-value" id="aiak-value">—</div></article>
+      <article><h2>AIAK / Community</h2><div class="metric-value" id="ratio-value">—</div></article>
+    </section>
+    <section class="chart-panel">
+      <div class="panel-heading"><h2 id="chart-title">输入吞吐</h2><div class="legend"><span><i class="community"></i>Community</span><span><i class="aiak"></i>AIAK</span></div></div>
+      <div id="chart" aria-label="并发与吞吐曲线"></div>
+      <div id="empty" class="empty-chart">暂无测试结果</div>
+    </section>
+    <section class="table-panel">
+      <div class="panel-heading"><h2>测试明细 <span id="point-count">0</span></h2><button id="download-csv">导出 CSV ↗</button></div>
+      <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th>吞吐 (tok/s)</th><th>稳态 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="table-empty" id="table-empty">暂无记录</div>
+    </section>
+    <section id="failure-panel" hidden><h2>启动失败</h2><table><thead><tr><th>运行</th><th>引擎</th><th>阶段</th></tr></thead><tbody id="failure-rows"></tbody></table></section>
+    <div id="error" role="alert" hidden></div>
+  </main>
+  <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><h2>测量口径</h2><table><tbody><tr><th>Prefill</th><td>固定输入，输出 1 token；输入 tokens/s</td></tr><tr><th>Decode</th><td>合成 KV，真实专家路由；输出 tokens/s</td></tr><tr><th>稳态区间</th><td>原生客户端提取：并发 ≥峰值 80% 的最长连续区间</td></tr><tr><th>合格容量</th><td>≥3 次独立重复；每次稳态 ≥120 s；平均并发 ≥目标 80%；跨重复 CV ≤5%；请求全部成功</td></tr><tr><th>吞吐比</th><td>同一运行、同一比较条件下，两套引擎各自的已测合格峰值之比</td></tr><tr><th>原始证据</th><td>保存在内网运行目录</td></tr></tbody></table></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
 </html>

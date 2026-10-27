@@ -15,6 +15,10 @@ on:
         type: choice
         options: [all, P, D]
         default: all
+      validate_only:
+        description: Validate configuration and publication without launching engines
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -29,6 +33,7 @@ jobs:
       PROFILE: ${{ inputs.profile }}
       ENGINE: ${{ inputs.engine }}
       PHASE: ${{ inputs.phase }}
+      VALIDATE_ONLY: ${{ inputs.validate_only }}
       BENCH_CONFIG: ${{ vars.BENCH_CONFIG }}
       BENCH_SMOKE_CONFIG: ${{ vars.BENCH_SMOKE_CONFIG }}
       BENCH_RESULTS_DIR: ${{ vars.BENCH_RESULTS_DIR }}
@@ -55,6 +60,10 @@ jobs:
           config="$BENCH_CONFIG"
           if [ "$PROFILE" = smoke ]; then config="$BENCH_SMOKE_CONFIG"; fi
           mkdir -p "$BENCH_RESULTS_DIR"
+          if [ "$VALIDATE_ONLY" = true ]; then
+            .venv/bin/python scripts/run_benchmark.py --config "$config" --dry-run
+            exit 0
+          fi
           .venv/bin/python scripts/run_benchmark.py --config "$config" \
             --profile "$PROFILE" --engine "$ENGINE" --phase "$PHASE" \
             > "$BENCH_RESULTS_DIR/workflow-$GITHUB_RUN_ID.log" 2>&1

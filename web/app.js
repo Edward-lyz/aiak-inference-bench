@@ -5,12 +5,12 @@ import { CanvasRenderer } from "echarts/renderers";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const chart = echarts.init(document.querySelector("#chart"));
-const colors = { community: "#8797a5", aiak: "#3d8d66" };
+const colors = { community: "#37352f", aiak: "#a7a5a0" };
 const names = { community: "Community SGLang", aiak: "AIAK SGLang" };
 let report = { schema_version: 1, points: [], series: [], failures: [] };
 let phase = "P";
 let visiblePoints = [];
-const controls = Object.fromEntries(["model", "context", "profile", "comparison"].map(id => [id, document.getElementById(id)]));
+const controls = Object.fromEntries(["model", "context", "profile", "comparison", "run"].map(id => [id, document.getElementById(id)]));
 const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
 function fillOptions(select, values, labels = values) {
@@ -28,41 +28,40 @@ function refreshFilters() {
     point.model === controls.model.value && String(point.input_length) === controls.context.value &&
     point.profile === controls.profile.value
   ).map(point => point.comparison_key))];
-  fillOptions(controls.comparison, groups, groups.map(value => `${value.slice(0, 8)} · 同条件组`));
+  fillOptions(controls.comparison, groups, groups.map(value => {
+    const sample = points.find(point => point.comparison_key === value);
+    return `${sample.precision.toUpperCase()} · ${sample.gpu_count} GPU · ${sample.model_revision}`;
+  }));
+  const runIds = [...new Set(points.filter(point => point.comparison_key === controls.comparison.value).map(point => point.run_id))].sort().reverse();
+  fillOptions(controls.run, runIds, runIds.map(value => {
+    const sample = points.find(point => point.run_id === value);
+    return new Date(sample.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }));
   render();
 }
 
 function render() {
   document.querySelectorAll("[data-phase]").forEach(button => button.classList.toggle("selected", button.dataset.phase === phase));
-  document.querySelector("#phase-note").textContent = phase === "P"
-    ? "P · 集中式服务，固定输入、输出 1 token、关闭 prefix cache。"
-    : "D · Synthetic KV · 保留真实专家路由；只表示合成单压容量，不代表生产精度或真实 1P1D 吞吐。";
-  document.querySelector("#chart-subtitle").textContent = `${phase === "P" ? "输入" : "输出"}吞吐 · tokens / second`;
+  document.querySelector("#kv-mode").textContent = phase === "P" ? "真实" : "合成";
+  document.querySelector("#chart-title").textContent = `${phase === "P" ? "输入" : "输出"}吞吐 (tok/s)`;
+  document.querySelector("#metrics").hidden = controls.profile.value === "smoke";
   visiblePoints = report.points.filter(point => point.phase === phase &&
     point.model === controls.model.value && String(point.input_length) === controls.context.value &&
-    point.profile === controls.profile.value && point.comparison_key === controls.comparison.value);
-  const selectedSeries = report.series.filter(series => series.comparison_key === controls.comparison.value);
-  // Only compare engines from the same run. New incomplete runs must not inherit an older engine's peak.
-  const runIds = [...new Set(selectedSeries.map(series => series.run_id))].sort();
-  const latestRun = runIds.at(-1);
-  const latestSeries = selectedSeries.filter(series => series.run_id === latestRun);
+    point.profile === controls.profile.value && point.comparison_key === controls.comparison.value &&
+    point.run_id === controls.run.value);
+  const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
   const peaks = {};
   for (const engine of Object.keys(names)) {
     peaks[engine] = latestSeries.filter(series => series.engine === engine && series.stable)
       .sort((a, b) => b.throughput - a.throughput)[0];
     const value = document.getElementById(`${engine}-value`);
-    const foot = document.getElementById(`${engine}-foot`);
     value.replaceChildren(document.createTextNode(peaks[engine] ? format.format(peaks[engine].throughput) : "—"));
     if (peaks[engine]) {
-      const unit = document.createElement("small"); unit.textContent = "tok/s"; value.append(unit);
-      foot.textContent = `并发 ${peaks[engine].concurrency} · ${peaks[engine].repeats} 次重复 · CV ${(peaks[engine].cv * 100).toFixed(1)}%`;
-    } else {
-      foot.textContent = controls.profile.value === "smoke" ? "Smoke 不参与容量排名" : "等待合格的容量结果";
+      const unit = document.createElement("span"); unit.className = "unit"; unit.textContent = "tok/s"; value.append(unit);
     }
   }
   const canCompare = peaks.community && peaks.aiak;
   document.querySelector("#ratio-value").textContent = canCompare ? `${(peaks.aiak.throughput / peaks.community.throughput).toFixed(2)}×` : "—";
-  document.querySelector("#ratio-foot").textContent = canCompare ? "AIAK / Community · 已扫描范围的合格峰值" : "两套引擎均通过稳定性验证后显示";
   document.querySelector("#empty").hidden = latestSeries.length > 0;
   const chartSeries = Object.keys(names).flatMap(engine => [true, false].map(stable => ({
     name: names[engine] + (stable ? "" : " · 未验证"),
@@ -75,21 +74,19 @@ function render() {
     animation: false, textStyle: { fontFamily: "system-ui" },
     grid: { left: 76, right: 35, top: 32, bottom: 48 },
     tooltip: { trigger: "axis", valueFormatter: value => value == null ? "—" : `${format.format(value)} tok/s` },
-    xAxis: { type: "log", logBase: 2, min: 1, max: Math.max(2, ...latestSeries.map(s => s.concurrency)), name: "并发", nameLocation: "middle", nameGap: 30, nameTextStyle: { color: "#97a59c", fontSize: 10 }, axisLabel: { color: "#9ca89f", fontSize: 10 }, axisTick: { show: false }, axisLine: { lineStyle: { color: "#e8eee9" } }, splitLine: { show: false } },
-    yAxis: { type: "value", min: 0, axisLabel: { color: "#9ca89f", fontSize: 10, formatter: value => value >= 1000 ? `${value / 1000}k` : value }, splitLine: { lineStyle: { color: "#eff3ef", type: "dashed" } } },
+    xAxis: { type: "log", logBase: 2, min: 1, max: Math.max(2, ...latestSeries.map(s => s.concurrency)), name: "并发", nameLocation: "middle", nameGap: 32, nameTextStyle: { color: "#787774", fontSize: 14 }, axisLabel: { color: "#787774", fontSize: 14 }, axisTick: { show: false }, axisLine: { lineStyle: { color: "#e9e9e7" } }, splitLine: { show: false } },
+    yAxis: { type: "value", min: 0, axisLabel: { color: "#787774", fontSize: 14, formatter: value => value >= 1000 ? `${value / 1000}k` : value }, splitLine: { lineStyle: { color: "#eeedeb" } } },
     series: chartSeries,
   }, true);
-  document.querySelector("#scope").textContent = latestSeries.length
-    ? `运行 ${latestRun} · 已测并发 ${Math.min(...latestSeries.map(s => s.concurrency))}–${Math.max(...latestSeries.map(s => s.concurrency))} · 不代表全局极限`
-    : "扫描上限与实测范围会随结果显示";
   const rows = document.querySelector("#rows");
   rows.replaceChildren();
   for (const point of [...visiblePoints].reverse()) {
     const row = document.createElement("tr");
     const engineCell = document.createElement("td");
     engineCell.textContent = names[point.engine] || point.engine;
-    const version = document.createElement("small"); version.textContent = point.engine_sha.slice(0, 10);
-    engineCell.append(version); row.append(engineCell);
+    row.append(engineCell);
+    const version = document.createElement("td"); version.className = "version"; version.textContent = point.engine_sha.slice(0, 10);
+    row.append(version);
     for (const value of [point.concurrency, point.throughput, point.duration, point.ttft_ms, point.tpot_ms]) {
       const cell = document.createElement("td"); cell.textContent = value == null ? "—" : format.format(value); row.append(cell);
     }
@@ -99,14 +96,22 @@ function render() {
     status.textContent = point.status !== "ok" ? point.status : point.stable ? "合格容量" : point.profile === "smoke" ? "Smoke" : "待验证";
     status.title = point.error || ""; statusCell.append(status); row.append(statusCell);
     const runCell = document.createElement("td"); runCell.textContent = `#${point.repetition}`;
-    const run = document.createElement("small"); run.textContent = point.run_id; runCell.append(run); row.append(runCell);
+    row.append(runCell);
     rows.append(row);
   }
   document.querySelector("#point-count").textContent = visiblePoints.length;
   document.querySelector("#table-empty").hidden = visiblePoints.length > 0;
   const failures = report.failures.filter(failure => failure.phase === phase);
-  document.querySelector("#table-empty").textContent = failures.length ? `${failures.length} 次服务启动失败，详细日志保存在内网运行目录` : "暂无测试记录";
-  document.querySelector("#update-time").textContent = report.generated_at ? `更新于 ${new Date(report.generated_at).toLocaleString("zh-CN")}` : "尚未加载结果";
+  document.querySelector("#failure-panel").hidden = failures.length === 0;
+  const failureRows = document.querySelector("#failure-rows");
+  failureRows.replaceChildren();
+  for (const failure of failures) {
+    const row = document.createElement("tr");
+    for (const value of [failure.run_id, names[failure.engine], failure.phase]) {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    }
+    failureRows.append(row);
+  }
 }
 
 function acceptReport(payload) {

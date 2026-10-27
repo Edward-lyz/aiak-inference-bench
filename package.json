@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite web --host 127.0.0.1",
-    "build": "vite build web --outDir ../dist --emptyOutDir",
-    "preview": "vite preview web --outDir ../dist --host 127.0.0.1"
+    "dev": "vite web --config web/vite.config.js --host 127.0.0.1",
+    "build": "vite build web --config web/vite.config.js --outDir ../dist --emptyOutDir",
+    "preview": "vite preview web --config web/vite.config.js --outDir ../dist --host 127.0.0.1"
   },
   "dependencies": {
     "echarts": "6.1.0"

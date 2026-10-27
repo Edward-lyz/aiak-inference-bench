@@ -124,6 +124,9 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
     command = [
         "docker", "run", "--rm", "--name", client_name, "--network", "host",
         "--label", f"aiak-bench.run={run_dir.name}",
+        "-e", "NVIDIA_VISIBLE_DEVICES=void", "-e", "CUDA_VISIBLE_DEVICES=",
+        "-e", "OPENBLAS_NUM_THREADS=1",
+        *(["--security-opt", config["docker_security_opt"]] if config.get("docker_security_opt") else []),
         "-v", f"{config['model_path']}:/model:ro", "-v", f"{point_dir}:/results",
         "--entrypoint", "python3", client_image,
         "-m", "sglang.benchmark.steady_state_serving",
@@ -159,8 +162,9 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         steady = json.loads((point_dir / "steady.jsonl").read_text(encoding="utf-8").splitlines()[-1])
         if raw["completed"] != prompts:
             raise RuntimeError(f"Only {raw['completed']}/{prompts} requests completed")
-        if phase == "D" and raw["total_output_tokens"] <= raw["completed"]:
-            raise RuntimeError("Decode produced <=1 token/request; not a decode measurement")
+        expected_output = prompts * point["output_length"]
+        if raw["total_output_tokens"] != expected_output:
+            raise RuntimeError(f"Output token count {raw['total_output_tokens']} != requested {expected_output}")
         measured = {key: raw[key] for key in (
             "duration", "completed", "total_input_tokens", "total_output_tokens",
             "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
@@ -186,6 +190,7 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         "docker", "run", "-d", "--name", name, "--gpus",
         '"device=' + ",".join(map(str, config["gpu_ids"])) + '"',
         "--network", "host", "--shm-size", "32g", "--label", f"aiak-bench.run={run_dir.name}",
+        *(["--security-opt", config["docker_security_opt"]] if config.get("docker_security_opt") else []),
         "-v", f"{config['model_path']}:/model:ro",
     ]
     for key, value in engine.get("env", {}).items():
@@ -276,6 +281,7 @@ def main() -> None:
             "client": image_identity(config["client_image"]),
             "engines": {engine["id"]: image_identity(engine["image"]) for engine in engines},
             "config": config,
+            "docker_version": subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True).strip(),
         }
         save_json(run_dir / "manifest.json", manifest)
         def stop_on_signal(signum: int, frame: object) -> None:

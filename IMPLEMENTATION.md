@@ -20,6 +20,8 @@ Implementation decisions:
 - Native `steady_state_serving` replaces a custom window extractor. Qualification uses ≥3 native steady intervals of ≥120 seconds and repeat CV ≤5%. No within-window CV claim.
 - D uses native fake KV, real expert routing, MTP off. No estimated acceptance or GPU multiplier.
 - Sweep boundaries are displayed; only measured, qualified points may rank.
+- UI follows the user's Notion-style requirement: monochrome, normal-size field labels and columns, no explanatory captions or footnotes.
+- B200dev Docker 20.10.5 prevents thread creation in the newer community image. The unmodified Moby v20.10.24 profile also fails because the installed runtime cannot install its `clone3` rule. Native `seccomp=unconfined` for this project's containers passes the CPU thread probe; this container-level exception is explicit in the local config and run manifest.
 
 Status:
 

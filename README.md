@@ -19,6 +19,8 @@ Use a separate local smoke config with short input/output lengths, a small concu
 
 Images must already be present (`docker pull` explicitly before the run). Each image is resolved to a local content ID, repository digest and source SHA once per run. Both engines use the same community image's native benchmark client. Weights are mounted read-only; keep their revision fixed during the entire run.
 
+The optional local `docker_security_opt` field passes a native Docker security option to project containers. B200dev's Docker 20.10.5 requires `seccomp=unconfined` for the newer image to create threads. This disables syscall filtering inside those containers and is recorded in the manifest; use only the trusted benchmark images configured by the operator. A future host runtime upgrade should remove this exception.
+
 Private local configs, results, raw logs and site data are ignored by Git. Repository directory name `PUBLIC_REPO` does not change the GitHub repository's private visibility.
 
 ## What the numbers mean
