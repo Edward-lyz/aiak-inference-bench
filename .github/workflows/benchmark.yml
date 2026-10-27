@@ -1,0 +1,71 @@
+name: P-D capacity benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Smoke validates the chain; capacity runs the configured full search
+        type: choice
+        options: [smoke, capacity]
+        default: smoke
+      engine:
+        type: choice
+        options: [all, community, aiak]
+        default: all
+      phase:
+        type: choice
+        options: [all, P, D]
+        default: all
+permissions:
+  contents: read
+concurrency:
+  group: b200dev-pd-bench
+  cancel-in-progress: false
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, b200dev, pd-bench]
+    timeout-minutes: 720
+    env:
+      PROFILE: ${{ inputs.profile }}
+      ENGINE: ${{ inputs.engine }}
+      PHASE: ${{ inputs.phase }}
+      BENCH_CONFIG: ${{ vars.BENCH_CONFIG }}
+      BENCH_SMOKE_CONFIG: ${{ vars.BENCH_SMOKE_CONFIG }}
+      BENCH_RESULTS_DIR: ${{ vars.BENCH_RESULTS_DIR }}
+      BENCH_SITE_DIR: ${{ vars.BENCH_SITE_DIR }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Validate tooling and build static frontend
+        run: |
+          set -euo pipefail
+          test -n "$BENCH_CONFIG" && test -n "$BENCH_SMOKE_CONFIG"
+          test -n "$BENCH_RESULTS_DIR" && test -n "$BENCH_SITE_DIR"
+          python3 -m venv --without-pip .venv
+          .venv/bin/python -m unittest discover -s tests -v
+          npm ci --ignore-scripts
+          npm run build
+      - name: Run serial native benchmark
+        run: |
+          set -euo pipefail
+          config="$BENCH_CONFIG"
+          if [ "$PROFILE" = smoke ]; then config="$BENCH_SMOKE_CONFIG"; fi
+          mkdir -p "$BENCH_RESULTS_DIR"
+          .venv/bin/python scripts/run_benchmark.py --config "$config" \
+            --profile "$PROFILE" --engine "$ENGINE" --phase "$PHASE" \
+            > "$BENCH_RESULTS_DIR/workflow-$GITHUB_RUN_ID.log" 2>&1
+      - name: Publish internal summary including failures
+        if: always()
+        run: |
+          set -euo pipefail
+          test -d dist && test -n "$BENCH_RESULTS_DIR" && test -n "$BENCH_SITE_DIR"
+          mkdir -p dist/data "$BENCH_SITE_DIR"
+          python3 scripts/summarize.py "$BENCH_RESULTS_DIR" dist/data/summary.json
+          rsync -a --delete dist/ "$BENCH_SITE_DIR/"
+      - name: Remove this job's build dependencies
+        if: always()
+        run: rm -rf node_modules .venv dist

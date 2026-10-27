@@ -1,0 +1,79 @@
+{
+  "model_name": "DeepSeek-V4.1-Flash",
+  "model_path": "/path/to/DeepSeek-V4.1-Flash",
+  "model_revision": "set-to-the-weight-revision",
+  "precision": "fp8",
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "port": 31080,
+  "output_dir": "/path/to/bench-results",
+  "client_image": "replace-with-pinned-community-image",
+  "engines": [
+    {
+      "id": "community",
+      "image": "replace-with-community-nightly",
+      "extra_args": [],
+      "env": {}
+    },
+    {
+      "id": "aiak",
+      "image": "replace-with-aiak-release",
+      "extra_args": [],
+      "env": {}
+    }
+  ],
+  "server_args": [
+    "--tp-size",
+    "8",
+    "--mem-fraction-static",
+    "0.8",
+    "--context-length",
+    "69632",
+    "--chunked-prefill-size",
+    "8192",
+    "--disable-radix-cache",
+    "--enable-metrics",
+    "--ep-size",
+    "8",
+    "--trust-remote-code",
+    "--cuda-graph-max-bs",
+    "128",
+    "--max-running-requests",
+    "128"
+  ],
+  "phase_args": {
+    "P": [],
+    "D": [
+      "--disaggregation-mode",
+      "decode",
+      "--disaggregation-transfer-backend",
+      "fake"
+    ]
+  },
+  "input_length": 65536,
+  "decode_output_length": 512,
+  "concurrencies": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128
+  ],
+  "num_prompts": 256,
+  "repetitions": 3,
+  "min_steady_seconds": 120,
+  "max_cv": 0.05,
+  "startup_timeout_seconds": 1800,
+  "point_timeout_seconds": 1800
+}

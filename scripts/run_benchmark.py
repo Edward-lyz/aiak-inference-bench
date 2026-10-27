@@ -1,0 +1,295 @@
+"""Run native SGLang clients against isolated Docker servers; retain evidence locally."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from urllib.error import URLError
+from urllib.request import ProxyHandler, build_opener
+
+from summarize import build_summary
+
+
+def validate_config(config: dict) -> None:
+    required = (
+        "model_name", "model_path", "model_revision", "precision", "gpu_ids",
+        "port", "output_dir", "client_image", "engines", "server_args",
+        "phase_args", "input_length", "decode_output_length", "concurrencies",
+        "num_prompts", "repetitions", "min_steady_seconds", "max_cv",
+        "startup_timeout_seconds", "point_timeout_seconds",
+    )
+    missing = [key for key in required if key not in config]
+    if missing:
+        raise ValueError(f"Missing config fields: {missing}")
+    for key in (
+        "input_length", "decode_output_length", "num_prompts", "repetitions",
+        "startup_timeout_seconds", "point_timeout_seconds",
+    ):
+        if type(config[key]) is not int or config[key] <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+    if config["decode_output_length"] <= 1:
+        raise ValueError("Decode needs more than one output token")
+    if not config["concurrencies"] or any(type(c) is not int or c <= 0 for c in config["concurrencies"]):
+        raise ValueError("concurrencies must contain positive integers")
+    if config["concurrencies"] != sorted(set(config["concurrencies"])):
+        raise ValueError("concurrencies must be unique and increasing")
+    if not config["gpu_ids"] or len(set(config["gpu_ids"])) != len(config["gpu_ids"]):
+        raise ValueError("gpu_ids must be nonempty and unique")
+    if any(type(gpu) is not int or gpu < 0 for gpu in config["gpu_ids"]):
+        raise ValueError("gpu_ids must contain nonnegative integers")
+    if not 1024 <= config["port"] <= 65535:
+        raise ValueError("port must be between 1024 and 65535")
+    if not 0 < config["max_cv"] <= 0.05 or config["min_steady_seconds"] < 120:
+        raise ValueError("Capacity qualification needs min_steady_seconds >= 120 and 0 < max_cv <= 0.05")
+    if not Path(config["model_path"]).joinpath("config.json").is_file():
+        raise ValueError("model_path must contain config.json")
+    if len({engine["id"] for engine in config["engines"]}) != len(config["engines"]):
+        raise ValueError("Engine IDs must be unique")
+    for engine in config["engines"]:
+        if engine["id"] not in ("community", "aiak"):
+            raise ValueError("Engine ID must be community or aiak")
+        if not isinstance(engine["image"], str) or not engine["image"]:
+            raise ValueError("Each engine needs an image")
+        if any("speculative" in arg or "ep-dispatch-algorithm" in arg for arg in engine.get("extra_args", [])):
+            raise ValueError("Engine overrides cannot enable MTP or fake expert routing")
+    for args in [config["server_args"], *config["phase_args"].values()]:
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            raise ValueError("Server arguments must be arrays of strings")
+    if "--disable-radix-cache" not in config["server_args"]:
+        raise ValueError("This capacity profile requires --disable-radix-cache")
+    if any("speculative" in arg or "ep-dispatch-algorithm" in arg for arg in config["server_args"]):
+        raise ValueError("This profile supports MTP off and real expert routing only")
+
+
+def save_json(path: Path, payload: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def image_identity(image: str) -> dict:
+    details = json.loads(subprocess.check_output(["docker", "image", "inspect", image], text=True))[0]
+    source = subprocess.check_output([
+        "docker", "run", "--rm", "--entrypoint", "git", details["Id"],
+        "-C", "/sgl-workspace/sglang", "rev-parse", "HEAD",
+    ], text=True).strip()
+    return {"reference": image, "id": details["Id"], "repo_digests": details["RepoDigests"], "source_sha": source}
+
+
+def check_gpu_ownership(server_name: str | None = None) -> None:
+    active_pids = set(subprocess.check_output([
+        "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits",
+    ], text=True).split())
+    owned_pids = set()
+    if server_name:
+        owned_pids = set(subprocess.check_output(["docker", "top", server_name, "-eo", "pid"], text=True).split()[1:])
+    foreign_pids = active_pids - owned_pids
+    if foreign_pids:
+        raise RuntimeError(f"External GPU compute processes present: {sorted(foreign_pids)}")
+
+
+def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetition: int,
+              run_dir: Path, client_image: str, profile: str, manifest: dict, server_name: str) -> dict:
+    point_dir = run_dir / f"{engine['id']}-{phase}-c{concurrency}-r{repetition}"
+    point_dir.mkdir()
+    client_name = f"aiak-bench-client-{run_dir.name}-{engine['id']}-{phase.lower()}-{concurrency}-{repetition}"
+    prompts = config["num_prompts"] if profile == "smoke" else max(config["num_prompts"], 8 * concurrency)
+    point = {
+        "schema_version": 1, "run_id": run_dir.name, "timestamp": datetime.now(timezone.utc).isoformat(),
+        "engine": engine["id"], "engine_sha": manifest["engines"][engine["id"]]["source_sha"],
+        "image_id": manifest["engines"][engine["id"]]["id"], "client_image_id": client_image,
+        "model": config["model_name"], "model_revision": config["model_revision"],
+        "model_config_sha256": manifest["model_config_sha256"], "precision": config["precision"],
+        "phase": phase, "measurement_mode": "client" if phase == "P" else "client-synthetic-kv",
+        "fake_kv": phase == "D", "fake_ep": False, "mtp": False,
+        "cache_mode": "off", "profile": profile, "input_length": config["input_length"],
+        "output_length": 1 if phase == "P" else config["decode_output_length"],
+        "concurrency": concurrency, "repetition": repetition, "num_prompts": prompts,
+        "gpu_count": len(config["gpu_ids"]), "hardware": manifest["hardware"],
+        "seed": 42, "status": "running", "error": None,
+        "min_steady_seconds": config["min_steady_seconds"], "max_cv": config["max_cv"],
+        "server_args": config["server_args"] + config["phase_args"][phase],
+    }
+    save_json(point_dir / "point.json", point)
+    command = [
+        "docker", "run", "--rm", "--name", client_name, "--network", "host",
+        "--label", f"aiak-bench.run={run_dir.name}",
+        "-v", f"{config['model_path']}:/model:ro", "-v", f"{point_dir}:/results",
+        "--entrypoint", "python3", client_image,
+        "-m", "sglang.benchmark.steady_state_serving",
+        "--steady-state-concurrency-ratio", "0.8",
+        "--steady-state-output-file", "/results/steady.jsonl",
+        "--backend", "sglang", "--base-url", f"http://127.0.0.1:{config['port']}",
+        "--model", "/model", "--tokenizer", "/model", "--dataset-name", "random",
+        "--random-input-len", str(config["input_length"]),
+        "--random-output-len", str(point["output_length"]), "--random-range-ratio", "0",
+        "--num-prompts", str(prompts), "--max-concurrency", str(concurrency),
+        "--request-rate", "inf", "--seed", "42", "--warmup-requests", str(min(concurrency, 4)),
+        "--ignore-eos", "--output-file", "/results/raw.jsonl",
+    ]
+    if phase == "D":
+        command.append("--fake-prefill")
+    save_json(point_dir / "command.json", {"argv": command})
+    print(f"Running {point_dir.name}", flush=True)
+    process = None
+    try:
+        check_gpu_ownership(server_name)
+        with (point_dir / "client.log").open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + config["point_timeout_seconds"]
+            while process.poll() is None:
+                check_gpu_ownership(server_name)
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Native client exceeded point timeout")
+                time.sleep(5)
+        check_gpu_ownership(server_name)
+        if process.returncode != 0:
+            raise RuntimeError(f"Native client exited {process.returncode}; inspect client.log")
+        raw = json.loads((point_dir / "raw.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        steady = json.loads((point_dir / "steady.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        if raw["completed"] != prompts:
+            raise RuntimeError(f"Only {raw['completed']}/{prompts} requests completed")
+        if phase == "D" and raw["total_output_tokens"] <= raw["completed"]:
+            raise RuntimeError("Decode produced <=1 token/request; not a decode measurement")
+        measured = {key: raw[key] for key in (
+            "duration", "completed", "total_input_tokens", "total_output_tokens",
+            "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
+        )}
+        point.update(status="ok", metrics=measured, steady=steady)
+    except (subprocess.CalledProcessError, RuntimeError, OSError, ValueError, KeyError) as exc:
+        point.update(status="failed", error=str(exc))
+    finally:
+        subprocess.run(["docker", "rm", "-f", client_name], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
+        if process is not None:
+            process.wait(timeout=30)
+        save_json(point_dir / "point.json", point)
+    return point
+
+
+def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
+               profile: str, manifest: dict) -> bool:
+    name = f"aiak-bench-server-{run_dir.name}-{engine['id']}-{phase.lower()}"
+    server_log = run_dir / f"{engine['id']}-{phase}-server.log"
+    opener = build_opener(ProxyHandler({}))
+    command = [
+        "docker", "run", "-d", "--name", name, "--gpus",
+        '"device=' + ",".join(map(str, config["gpu_ids"])) + '"',
+        "--network", "host", "--shm-size", "32g", "--label", f"aiak-bench.run={run_dir.name}",
+        "-v", f"{config['model_path']}:/model:ro",
+    ]
+    for key, value in engine.get("env", {}).items():
+        command.extend(["-e", f"{key}={value}"])
+    command.extend([
+        "--entrypoint", "python3", manifest["engines"][engine["id"]]["id"],
+        "-m", "sglang.launch_server", "--model-path", "/model",
+        "--served-model-name", config["model_name"], "--host", "127.0.0.1", "--port", str(config["port"]),
+        *config["server_args"], *config["phase_args"][phase], *engine.get("extra_args", []),
+    ])
+    save_json(run_dir / f"{engine['id']}-{phase}-launch.json", {"argv": command})
+    print(f"Starting {name}", flush=True)
+    success = True
+    try:
+        check_gpu_ownership()
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+        deadline = time.monotonic() + config["startup_timeout_seconds"]
+        while time.monotonic() < deadline:
+            state = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True).strip()
+            if state != "true":
+                raise RuntimeError(f"Server exited during startup: {name}")
+            try:
+                with opener.open(f"http://127.0.0.1:{config['port']}/health", timeout=3) as response:
+                    if response.status == 200:
+                        break
+            except (URLError, TimeoutError):
+                pass  # Readiness polling; deadline and container state are checked above.
+            time.sleep(5)
+        else:
+            raise RuntimeError(f"Server readiness exceeded {config['startup_timeout_seconds']}s")
+        with opener.open(f"http://127.0.0.1:{config['port']}/server_info", timeout=10) as response:
+            save_json(run_dir / f"{engine['id']}-{phase}-server-info.json", json.load(response))
+        for concurrency in config["concurrencies"]:
+            for repetition in range(1, config["repetitions"] + 1):
+                point = run_point(config, engine, phase, concurrency, repetition, run_dir,
+                                  manifest["client"]["id"], profile, manifest, name)
+                build_summary(run_dir.parent, run_dir.parent / "summary.json")
+                if point["status"] != "ok":
+                    return False  # Do not continue pushing a failing or unhealthy engine.
+    except (RuntimeError, subprocess.CalledProcessError, URLError, OSError) as exc:
+        save_json(run_dir / f"{engine['id']}-{phase}-failure.json", {
+            "engine": engine["id"], "phase": phase, "run_id": run_dir.name,
+            "status": "failed", "error": str(exc), "stage": "server",
+        })
+        print(str(exc), file=sys.stderr, flush=True)
+        success = False
+    finally:
+        with server_log.open("w", encoding="utf-8") as log:
+            subprocess.run(["docker", "logs", name], stdout=log, stderr=subprocess.STDOUT, check=False)
+        subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return success
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--profile", choices=("smoke", "capacity"), default="smoke")
+    parser.add_argument("--engine", choices=("all", "community", "aiak"), default="all")
+    parser.add_argument("--phase", choices=("all", "P", "D"), default="all")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    config = json.loads(args.config.read_text(encoding="utf-8"))
+    validate_config(config)
+    engines = [engine for engine in config["engines"] if args.engine in ("all", engine["id"])]
+    if not engines:
+        raise ValueError("Requested engine is absent from config")
+    if args.dry_run:
+        print(json.dumps({"profile": args.profile, "engines": [e["id"] for e in engines],
+                          "phase": args.phase, "config_valid": True}))
+        return
+    output_dir = Path(config["output_dir"]).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # All configs share a host-level lock, including different checkouts and runners.
+    with Path("/tmp/aiak-inference-bench.gpu.lock").open("a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        check_gpu_ownership()
+        with socket.socket() as port_probe:
+            port_probe.bind(("127.0.0.1", config["port"]))
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+        run_dir = output_dir / run_id
+        run_dir.mkdir()
+        hardware = subprocess.check_output([
+            "nvidia-smi", "--query-gpu=index,name,memory.total,driver_version", "--format=csv,noheader",
+        ], text=True).strip()
+        manifest = {
+            "run_id": run_id, "profile": args.profile, "hardware": hardware,
+            "model_config_sha256": hashlib.sha256(Path(config["model_path"], "config.json").read_bytes()).hexdigest(),
+            "client": image_identity(config["client_image"]),
+            "engines": {engine["id"]: image_identity(engine["image"]) for engine in engines},
+            "config": config,
+        }
+        save_json(run_dir / "manifest.json", manifest)
+        def stop_on_signal(signum: int, frame: object) -> None:
+            raise KeyboardInterrupt(f"Received signal {signum}; cleaning this run's containers")
+        signal.signal(signal.SIGTERM, stop_on_signal)
+        all_ok = True
+        phases = ["P", "D"] if args.phase == "all" else [args.phase]
+        for engine in engines:
+            for phase in phases:
+                all_ok = run_server(config, engine, phase, run_dir, args.profile, manifest) and all_ok
+        build_summary(output_dir, output_dir / "summary.json")
+        print(f"Run evidence: {run_dir}", flush=True)
+        raise SystemExit(0 if all_ok else 1)
+
+
+if __name__ == "__main__":
+    main()

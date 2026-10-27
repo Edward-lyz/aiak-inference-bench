@@ -1,0 +1,32 @@
+name: Runner connectivity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: b200dev-health
+  cancel-in-progress: false
+jobs:
+  roundtrip:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, b200dev, pd-bench]
+    timeout-minutes: 10
+    steps:
+      - name: Create non-sensitive connectivity probe
+        run: |
+          mkdir -p "$RUNNER_TEMP/bench-connectivity"
+          printf '%s\n' 'aiak-inference-bench-runner-ok' > "$RUNNER_TEMP/bench-connectivity/probe.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-connectivity
+          path: ${{ runner.temp }}/bench-connectivity/probe.txt
+          retention-days: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: runner-connectivity
+          path: ${{ runner.temp }}/bench-connectivity/downloaded
+      - name: Verify artifact roundtrip
+        run: cmp "$RUNNER_TEMP/bench-connectivity/probe.txt" "$RUNNER_TEMP/bench-connectivity/downloaded/probe.txt"
+      - name: Remove temporary probe
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/bench-connectivity"
