@@ -52,7 +52,7 @@ jobs:
           test -n "$BENCH_RESULTS_DIR" && test -n "$BENCH_SITE_DIR"
           python3 -m venv --without-pip .venv
           .venv/bin/python -m unittest discover -s tests -v
-          npm ci --ignore-scripts
+          npm ci --ignore-scripts --cache "$RUNNER_TEMP/aiak-bench-npm-cache"
           npm run build
       - name: Run serial native benchmark
         run: |
@@ -77,4 +77,4 @@ jobs:
           rsync -a --delete dist/ "$BENCH_SITE_DIR/"
       - name: Remove this job's build dependencies
         if: always()
-        run: rm -rf node_modules .venv dist
+        run: rm -rf node_modules .venv dist "$RUNNER_TEMP/aiak-bench-npm-cache"

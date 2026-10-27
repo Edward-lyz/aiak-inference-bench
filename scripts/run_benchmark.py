@@ -212,6 +212,7 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
             state = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True).strip()
             if state != "true":
                 raise RuntimeError(f"Server exited during startup: {name}")
+            check_gpu_ownership(name)
             try:
                 with opener.open(f"http://127.0.0.1:{config['port']}/health", timeout=3) as response:
                     if response.status == 200:
@@ -264,7 +265,8 @@ def main() -> None:
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     # All configs share a host-level lock, including different checkouts and runners.
-    with Path("/tmp/aiak-inference-bench.gpu.lock").open("a", encoding="utf-8") as lock:
+    lock_fd = os.open("/tmp/aiak-inference-bench.gpu.lock", os.O_RDONLY | os.O_CREAT, 0o644)
+    with os.fdopen(lock_fd, "r", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         check_gpu_ownership()
         with socket.socket() as port_probe:

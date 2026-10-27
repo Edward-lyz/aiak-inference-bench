@@ -5,6 +5,7 @@ dist/
 results/
 site/
 *.local.json
+*.local.md
 *.log
 .env*
 !.env.example
