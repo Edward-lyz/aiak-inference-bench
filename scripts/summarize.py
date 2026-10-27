@@ -26,12 +26,16 @@ def build_summary(source: Path, destination: Path) -> dict:
                 "seed", "server_args", "client_image_id",
             )
         }
+        key_fields.update({key: point.get(key) for key in (
+            "dataset", "tokenized_prompt", "random_range_ratio",
+        )})
         comparison_key = hashlib.sha256(json.dumps(key_fields, sort_keys=True).encode()).hexdigest()[:20]
         public = {key: point[key] for key in (
             "run_id", "timestamp", "engine", "engine_sha", "model", "model_revision",
             "precision", "phase", "measurement_mode", "profile", "input_length",
             "output_length", "concurrency", "repetition", "gpu_count", "status",
         )}
+        public["dataset"] = point.get("dataset")
         # Full diagnostic strings may contain local paths; keep them in local raw evidence.
         public.update(comparison_key=comparison_key, error="See local run evidence" if point["error"] else None,
                       throughput=None, full_throughput=None, duration=None, ttft_ms=None, tpot_ms=None,

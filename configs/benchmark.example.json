@@ -44,7 +44,7 @@
     "--ep-size",
     "8",
     "--trust-remote-code",
-    "--cuda-graph-max-bs",
+    "--cuda-graph-max-bs-decode",
     "128",
     "--max-running-requests",
     "128"

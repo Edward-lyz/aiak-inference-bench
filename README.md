@@ -4,7 +4,7 @@ Compare community SGLang nightly and an aiak_sglang release on the same model an
 
 ## Run
 
-Use Python 3.10+, Docker with NVIDIA support, and a GPU host with a coordinated exclusive window. The runner refuses to start when any other compute process is present. It checks for interference every five seconds during measurement and never stops another user's process.
+Use Python 3.10+, Docker with NVIDIA support, and a GPU host with a coordinated exclusive window. Default runs refuse foreign GPU compute processes and check for interference every five seconds. An explicitly authorized root run may supply `--terminate-foreign-gpu-processes`; native Linux pidfds target the observed GPU processes without PID-reuse ambiguity. An overlapping measurement is invalidated even when the interfering process is removed.
 
 ```sh
 uv venv .venv
@@ -34,7 +34,9 @@ MTP is off. No manual acceptance multiplier or GPU-count multiplier is applied. 
 
 Native steady-state reporting selects the longest continuous interval at ≥80% of peak client concurrency. A capacity point requires at least three independent repetitions; every interval must last ≥120 seconds with average concurrency ≥80% of target; repeat throughput CV must be ≤5%, and all requests must succeed. The reported value is the median across repetitions. This measures cross-run repeatability, not within-run window CV.
 
-Short intervals stay unqualified. Increase `num_prompts` if needed; do not lower the threshold to turn a short run into a stable result. The sweep covers only `concurrencies` in the config. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, workload, client image and shared launch arguments are part of the comparison key.
+The pinned native client uses `random-ids`, `--tokenize-prompt` and `--random-range-ratio 1`, so input IDs and requested output lengths are fixed without downloading a dataset. EOS is ignored by that client's default behavior.
+
+Capacity measurements increase the native request count when an interval is shorter than the qualification threshold, targeting 150 seconds for a 120-second minimum, with at most three attempts per repetition. All native attempts are retained, and subsequent repetitions reuse the chosen request count. Short intervals still remain unqualified. The sweep covers only `concurrencies` in the config. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, dataset recipe, workload, client image and shared launch arguments are part of the comparison key.
 
 Results retain full-run throughput, native steady-state throughput, TTFT, TPOT, all repetitions and failures. Failed points are not represented as zero. Server failures are also retained. Each point has the exact argv and original native client output in its internal evidence directory.
 

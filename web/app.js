@@ -20,7 +20,8 @@ function fillOptions(select, values, labels = values) {
 }
 
 function refreshFilters() {
-  const points = report.points.filter(point => point.phase === phase);
+  const points = report.points.filter(point => point.phase === phase && point.profile === controls.profile.value)
+    .sort((a, b) => b.run_id.localeCompare(a.run_id));
   fillOptions(controls.model, [...new Set(points.map(point => point.model))]);
   const contexts = [...new Set(points.filter(point => point.model === controls.model.value).map(point => String(point.input_length)))];
   fillOptions(controls.context, contexts, contexts.map(value => `${format.format(Number(value))} tokens`));
@@ -49,6 +50,8 @@ function render() {
     point.model === controls.model.value && String(point.input_length) === controls.context.value &&
     point.profile === controls.profile.value && point.comparison_key === controls.comparison.value &&
     point.run_id === controls.run.value);
+  document.querySelector("#dataset-mode").textContent = visiblePoints[0]?.dataset === "random-ids"
+    ? "随机 Token IDs" : visiblePoints[0]?.dataset || "—";
   const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
   const peaks = {};
   for (const engine of Object.keys(names)) {

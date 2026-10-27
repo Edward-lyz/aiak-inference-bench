@@ -87,7 +87,7 @@ def image_identity(image: str) -> dict:
     return {"reference": image, "id": details["Id"], "repo_digests": details["RepoDigests"], "source_sha": source}
 
 
-def check_gpu_ownership(server_name: str | None = None) -> None:
+def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool = False) -> bool:
     active_pids = set(subprocess.check_output([
         "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits",
     ], text=True).split())
@@ -95,8 +95,36 @@ def check_gpu_ownership(server_name: str | None = None) -> None:
     if server_name:
         owned_pids = set(subprocess.check_output(["docker", "top", server_name, "-eo", "pid"], text=True).split()[1:])
     foreign_pids = active_pids - owned_pids
-    if foreign_pids:
+    if foreign_pids and not terminate_foreign:
         raise RuntimeError(f"External GPU compute processes present: {sorted(foreign_pids)}")
+    if not foreign_pids:
+        return False
+    if os.geteuid() != 0:
+        raise PermissionError("Terminating foreign GPU processes requires an explicitly authorized root run")
+    pidfds = {}
+    try:
+        for pid in sorted(foreign_pids):
+            try:
+                pidfds[pid] = os.pidfd_open(int(pid))
+            except ProcessLookupError:
+                continue
+        refreshed = set(subprocess.check_output([
+            "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits",
+        ], text=True).split())
+        targets = {pid: fd for pid, fd in pidfds.items() if pid in refreshed}
+        print(json.dumps({"event": "terminate_foreign_gpu", "pids": sorted(targets),
+                          "timestamp": datetime.now(timezone.utc).isoformat()}), flush=True)
+        for termination_signal in (signal.SIGTERM, signal.SIGKILL):
+            for fd in targets.values():
+                try:
+                    signal.pidfd_send_signal(fd, termination_signal)
+                except ProcessLookupError:
+                    continue
+            time.sleep(5 if termination_signal == signal.SIGTERM else 2)
+    finally:
+        for fd in pidfds.values():
+            os.close(fd)
+    return True
 
 
 def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetition: int,
@@ -118,6 +146,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "concurrency": concurrency, "repetition": repetition, "num_prompts": prompts,
         "gpu_count": len(config["gpu_ids"]), "hardware": manifest["hardware"],
         "seed": 42, "status": "running", "error": None,
+        "dataset": "random-ids", "tokenized_prompt": True, "random_range_ratio": 1.0,
         "min_steady_seconds": config["min_steady_seconds"], "max_cv": config["max_cv"],
         "server_args": config["server_args"] + config["phase_args"][phase],
     }
@@ -127,6 +156,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "--label", f"aiak-bench.run={run_dir.name}",
         "-e", "NVIDIA_VISIBLE_DEVICES=void", "-e", "CUDA_VISIBLE_DEVICES=",
         "-e", "OPENBLAS_NUM_THREADS=1",
+        "-e", "HF_HUB_OFFLINE=1", "-e", "TRANSFORMERS_OFFLINE=1",
         *(["--security-opt", config["docker_security_opt"]] if config.get("docker_security_opt") else []),
         "-v", f"{config['model_path']}:/model:ro", "-v", f"{point_dir}:/results",
         "--entrypoint", "python3", client_image,
@@ -134,47 +164,70 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "--steady-state-concurrency-ratio", "0.8",
         "--steady-state-output-file", "/results/steady.jsonl",
         "--backend", "sglang", "--base-url", f"http://127.0.0.1:{config['port']}",
-        "--model", "/model", "--tokenizer", "/model", "--dataset-name", "random",
+        "--model", "/model", "--tokenizer", "/model", "--dataset-name", "random-ids",
+        "--tokenize-prompt",
         "--random-input-len", str(config["input_length"]),
-        "--random-output-len", str(point["output_length"]), "--random-range-ratio", "0",
+        "--random-output-len", str(point["output_length"]), "--random-range-ratio", "1",
         "--num-prompts", str(prompts), "--max-concurrency", str(concurrency),
         "--request-rate", "inf", "--seed", "42", "--warmup-requests", str(min(concurrency, 4)),
-        "--ignore-eos", "--output-file", "/results/raw.jsonl",
+        "--output-file", "/results/raw.jsonl",
     ]
     if phase == "D":
         command.append("--fake-prefill")
     save_json(point_dir / "command.json", {"argv": command})
     print(f"Running {point_dir.name}", flush=True)
     process = None
+    attempts = []
     try:
-        check_gpu_ownership(server_name)
-        with (point_dir / "client.log").open("w", encoding="utf-8") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
-            deadline = time.monotonic() + config["point_timeout_seconds"]
-            while process.poll() is None:
-                check_gpu_ownership(server_name)
-                if time.monotonic() > deadline:
-                    raise RuntimeError("Native client exceeded point timeout")
-                time.sleep(5)
-        check_gpu_ownership(server_name)
-        if process.returncode != 0:
-            raise RuntimeError(f"Native client exited {process.returncode}; inspect client.log")
-        raw = json.loads((point_dir / "raw.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-        steady = json.loads((point_dir / "steady.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-        if raw["completed"] != prompts:
-            raise RuntimeError(f"Only {raw['completed']}/{prompts} requests completed")
-        expected_output = prompts * point["output_length"]
-        if raw["total_output_tokens"] != expected_output:
-            raise RuntimeError(f"Output token count {raw['total_output_tokens']} != requested {expected_output}")
-        measured = {key: raw[key] for key in (
-            "duration", "completed", "total_input_tokens", "total_output_tokens",
-            "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
-        )}
-        steady = {key: steady[key] for key in (
-            "input_throughput", "output_throughput", "duration", "average_concurrency",
-        )}
-        if any(value is not None and not math.isfinite(value) for value in [*measured.values(), *steady.values()]):
-            raise ValueError("Native metrics contain a non-finite number")
+        check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"])
+        deadline = time.monotonic() + config["point_timeout_seconds"]
+        for attempt in range(1, 2 if profile == "smoke" else 4):
+            point["num_prompts"] = prompts
+            command[command.index("--num-prompts") + 1] = str(prompts)
+            attempts.append({"attempt": attempt, "num_prompts": prompts, "argv": list(command)})
+            save_json(point_dir / "command.json", {"argv": command, "attempts": attempts})
+            with (point_dir / "client.log").open("a", encoding="utf-8") as log:
+                log.write(f"\nNative attempt {attempt}: {prompts} requests\n")
+                log.flush()
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+                while process.poll() is None:
+                    if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"]):
+                        raise RuntimeError("External GPU interference removed; overlapping measurement is invalid")
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Native client exceeded point timeout")
+                    time.sleep(5)
+            if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"]):
+                raise RuntimeError("External GPU interference removed; overlapping measurement is invalid")
+            if process.returncode != 0:
+                raise RuntimeError(f"Native client exited {process.returncode}; inspect client.log")
+            raw = json.loads((point_dir / "raw.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+            steady = json.loads((point_dir / "steady.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+            if raw["completed"] != prompts:
+                raise RuntimeError(f"Only {raw['completed']}/{prompts} requests completed")
+            if raw["total_input_tokens"] != prompts * config["input_length"]:
+                raise RuntimeError("Native input token count does not match the fixed-length workload")
+            expected_output = prompts * point["output_length"]
+            if raw["total_output_tokens"] != expected_output:
+                raise RuntimeError(f"Output token count {raw['total_output_tokens']} != requested {expected_output}")
+            measured = {key: raw[key] for key in (
+                "duration", "completed", "total_input_tokens", "total_output_tokens",
+                "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
+            )}
+            steady = {key: steady[key] for key in (
+                "input_throughput", "output_throughput", "duration", "average_concurrency",
+            )}
+            if any(value is not None and not math.isfinite(value) for value in [*measured.values(), *steady.values()]):
+                raise ValueError("Native metrics contain a non-finite number")
+            attempts[-1]["steady"] = steady
+            save_json(point_dir / "command.json", {"argv": command, "attempts": attempts})
+            if profile == "smoke" or (steady["duration"] or 0) >= config["min_steady_seconds"]:
+                break
+            next_prompts = min(16384, math.ceil(
+                prompts * config["min_steady_seconds"] * 1.25 / max(steady["duration"] or 0, 1)
+            ))
+            if next_prompts <= prompts:
+                break
+            prompts = next_prompts
         point.update(status="ok", metrics=measured, steady=steady)
     except KeyboardInterrupt:
         point.update(status="cancelled", error="Cancelled")
@@ -202,6 +255,10 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         *(["--security-opt", config["docker_security_opt"]] if config.get("docker_security_opt") else []),
         "-v", f"{config['model_path']}:/model:ro",
     ]
+    if config.get("cache_root"):
+        cache_dir = Path(config["cache_root"], engine["id"])
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        command.extend(["-v", f"{cache_dir}:/root/.cache"])
     for key, value in engine.get("env", {}).items():
         command.extend(["-e", f"{key}={value}"])
     command.extend([
@@ -214,14 +271,14 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
     print(f"Starting {name}", flush=True)
     success = True
     try:
-        check_gpu_ownership()
+        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"])
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
         deadline = time.monotonic() + config["startup_timeout_seconds"]
         while time.monotonic() < deadline:
             state = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True).strip()
             if state != "true":
                 raise RuntimeError(f"Server exited during startup: {name}")
-            check_gpu_ownership(name)
+            check_gpu_ownership(name, config["terminate_foreign_gpu_processes"])
             try:
                 with opener.open(f"http://127.0.0.1:{config['port']}/health", timeout=3) as response:
                     if response.status == 200:
@@ -234,12 +291,16 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         with opener.open(f"http://127.0.0.1:{config['port']}/server_info", timeout=10) as response:
             save_json(run_dir / f"{engine['id']}-{phase}-server-info.json", json.load(response))
         for concurrency in config["concurrencies"]:
+            point_config = dict(config)
             for repetition in range(1, config["repetitions"] + 1):
-                point = run_point(config, engine, phase, concurrency, repetition, run_dir,
+                point = run_point(point_config, engine, phase, concurrency, repetition, run_dir,
                                   manifest["client"]["id"], profile, manifest, name)
-                build_summary(run_dir.parent, run_dir.parent / "summary.json")
+                summary = build_summary(run_dir.parent, run_dir.parent / "summary.json")
+                if config.get("publish_summary_path"):
+                    save_json(Path(config["publish_summary_path"]), summary)
                 if point["status"] != "ok":
                     return False  # Do not continue pushing a failing or unhealthy engine.
+                point_config["num_prompts"] = point["num_prompts"]
     except (RuntimeError, subprocess.CalledProcessError, URLError, OSError) as exc:
         save_json(run_dir / f"{engine['id']}-{phase}-failure.json", {
             "engine": engine["id"], "phase": phase, "run_id": run_dir.name,
@@ -261,8 +322,13 @@ def main() -> None:
     parser.add_argument("--engine", choices=("all", "community", "aiak"), default="all")
     parser.add_argument("--phase", choices=("all", "P", "D"), default="all")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--terminate-foreign-gpu-processes", action="store_true",
+                        help="Authorized root runs only: terminate exact foreign GPU compute PIDs")
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    config["terminate_foreign_gpu_processes"] = args.terminate_foreign_gpu_processes
+    if args.terminate_foreign_gpu_processes and os.geteuid() != 0:
+        raise PermissionError("--terminate-foreign-gpu-processes requires root")
     validate_config(config)
     engines = [engine for engine in config["engines"] if args.engine in ("all", engine["id"])]
     if not engines:
@@ -277,7 +343,7 @@ def main() -> None:
     lock_fd = os.open("/tmp/aiak-inference-bench.gpu.lock", os.O_RDONLY | os.O_CREAT, 0o644)
     with os.fdopen(lock_fd, "r", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        check_gpu_ownership()
+        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"])
         with socket.socket() as port_probe:
             port_probe.bind(("127.0.0.1", config["port"]))
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
@@ -293,6 +359,8 @@ def main() -> None:
             "engines": {engine["id"]: image_identity(engine["image"]) for engine in engines},
             "config": config,
             "docker_version": subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True).strip(),
+            "orchestrator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         }
         save_json(run_dir / "manifest.json", manifest)
         def stop_on_signal(signum: int, frame: object) -> None:
@@ -305,7 +373,9 @@ def main() -> None:
                 for phase in phases:
                     all_ok = run_server(config, engine, phase, run_dir, args.profile, manifest) and all_ok
         finally:
-            build_summary(output_dir, output_dir / "summary.json")
+            summary = build_summary(output_dir, output_dir / "summary.json")
+            if config.get("publish_summary_path"):
+                save_json(Path(config["publish_summary_path"]), summary)
         print(f"Run evidence: {run_dir}", flush=True)
         raise SystemExit(0 if all_ok else 1)
 

@@ -31,5 +31,19 @@ Status:
 - GitHub-hosted checks passed; self-hosted runner artifact roundtrip passed (40500287026).
 - Self-hosted configuration/build/internal-publication validation passed (40503890924). This was `validate_only=true`, not a GPU benchmark.
 - Internal static service is deployed. Browser checks covered JSON import, CSV export and P/D switching; fixtures were not published.
-- GPU smoke has not run: another user's GPU process was detected. User is coordinating an exclusive window.
-- Full capacity scan, paired P/D results and final real-result publication remain pending that window and smoke validation.
+- The user authorized the overnight eight-GPU run. GPU smoke validation is in progress; earlier native CLI compatibility failures are retained as evidence.
+- Fixed-length offline input generation has been verified with the pinned native client for 1Ki/64Ki inputs and 1/512 outputs.
+- Full capacity scanning is gated on all eight community/aiak P/D smoke points succeeding.
+
+## Authorized overnight run — 2026-10-27
+
+User authorized the eight-GPU run and termination of other GPU compute processes.
+
+- Update the existing ownership check in `scripts/run_benchmark.py` with an explicit root-only termination option. Default behavior remains refusal. Use native signals against the exact observed PIDs, with process-identity checks, and record any interference.
+- Validate and run community/aiak P/D smoke; resolve launch/client incompatibilities using native flags.
+- Run the fixed 64Ki workload, concurrency scan and repeated measurements. Increase request counts if native steady intervals are too short; retain failed/contaminated measurements.
+- Publish real summaries to the existing internal static site and preserve raw evidence.
+- Risks: shared jobs may restart; terminating an in-flight foreign process does not make an overlapping measurement valid. Such points must fail rather than enter capacity rankings.
+- Observed cold-start DeepGEMM compilation takes 10–20 minutes. Reuse per-engine native cache directories through Docker bind mounts during this overnight run; remove the task-owned caches after completion.
+- Capacity points start with a bounded native request count and increase it when the native steady interval is below 120 seconds, targeting 150 seconds. Preserve every native attempt and reuse the chosen count for subsequent repetitions; do not reduce the qualification threshold.
+- Update `web/app.js` filter ordering so the selected profile determines available contexts, and new page loads prefer the most recent comparison group. This keeps real 64Ki capacity runs visible alongside earlier 1Ki smoke and diagnostic runs.

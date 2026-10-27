@@ -5,4 +5,4 @@
 - Call native Docker and SGLang CLIs. Keep this a small benchmark pipeline; do not introduce a generic orchestration framework.
 - Never publish fixtures or label smoke/short/failed measurements as qualified capacity.
 - Internal configuration, raw evidence and result data stay out of GitHub. Keep local configs ignored.
-- The user is coordinating the first exclusive 8-GPU window. Do not launch GPU tests until they confirm that window; CPU checks and static publication may proceed.
+- On 2026-10-27 the user explicitly authorized starting the overnight 8-GPU tests and terminating other GPU compute processes encountered during this run. Scope termination to GPU compute PIDs, preserve this benchmark's own processes, and record interference. Default runs still refuse foreign processes unless the explicit termination option is supplied.
