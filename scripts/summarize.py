@@ -15,6 +15,7 @@ import statistics
 def build_summary(source: Path, destination: Path) -> dict:
     points = []
     groups = defaultdict(list)
+    failed_groups = set()
     for point_file in sorted(source.glob("*/*/point.json")):
         point = json.loads(point_file.read_text(encoding="utf-8"))
         key_fields = {
@@ -48,6 +49,8 @@ def build_summary(source: Path, destination: Path) -> dict:
                 public.update(status="invalid", error="No usable native steady-state interval", throughput=None)
         if public["status"] == "ok":
             groups[(comparison_key, point["engine"], point["run_id"], point["concurrency"])].append((public, point))
+        else:
+            failed_groups.add((comparison_key, point["engine"], point["run_id"], point["concurrency"]))
         points.append(public)
     series = []
     for (comparison_key, engine, run_id, concurrency), samples in groups.items():
@@ -56,6 +59,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         representative, raw_point = samples[0]
         stable = (
             representative["profile"] == "capacity"
+            and (comparison_key, engine, run_id, concurrency) not in failed_groups
             and len({sample[0]["repetition"] for sample in samples}) >= 3
             and all(sample[0]["duration"] >= sample[1]["min_steady_seconds"] for sample in samples)
             and all(sample[0]["average_concurrency"] >= 0.8 * concurrency for sample in samples)

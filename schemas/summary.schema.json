@@ -38,7 +38,7 @@
         "profile": {"enum": ["smoke", "capacity"]},
         "measurement_mode": {"enum": ["client", "client-synthetic-kv"]},
         "comparison_key": {"type": "string", "pattern": "^[a-f0-9]{20}$"},
-        "status": {"enum": ["running", "ok", "failed", "invalid"]},
+        "status": {"enum": ["running", "ok", "failed", "invalid", "cancelled"]},
         "stable": {"type": "boolean"},
         "throughput": {"$ref": "#/$defs/nullableNumber"},
         "full_throughput": {"$ref": "#/$defs/nullableNumber"},

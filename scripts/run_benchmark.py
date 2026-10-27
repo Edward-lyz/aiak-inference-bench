@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -169,7 +170,15 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
             "duration", "completed", "total_input_tokens", "total_output_tokens",
             "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
         )}
+        steady = {key: steady[key] for key in (
+            "input_throughput", "output_throughput", "duration", "average_concurrency",
+        )}
+        if any(value is not None and not math.isfinite(value) for value in [*measured.values(), *steady.values()]):
+            raise ValueError("Native metrics contain a non-finite number")
         point.update(status="ok", metrics=measured, steady=steady)
+    except KeyboardInterrupt:
+        point.update(status="cancelled", error="Cancelled")
+        raise
     except (subprocess.CalledProcessError, RuntimeError, OSError, ValueError, KeyError) as exc:
         point.update(status="failed", error=str(exc))
     finally:
@@ -291,10 +300,12 @@ def main() -> None:
         signal.signal(signal.SIGTERM, stop_on_signal)
         all_ok = True
         phases = ["P", "D"] if args.phase == "all" else [args.phase]
-        for engine in engines:
-            for phase in phases:
-                all_ok = run_server(config, engine, phase, run_dir, args.profile, manifest) and all_ok
-        build_summary(output_dir, output_dir / "summary.json")
+        try:
+            for engine in engines:
+                for phase in phases:
+                    all_ok = run_server(config, engine, phase, run_dir, args.profile, manifest) and all_ok
+        finally:
+            build_summary(output_dir, output_dir / "summary.json")
         print(f"Run evidence: {run_dir}", flush=True)
         raise SystemExit(0 if all_ok else 1)
 

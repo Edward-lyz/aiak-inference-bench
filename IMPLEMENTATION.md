@@ -27,6 +27,9 @@ Status:
 
 - Private repository and dedicated non-root B200dev runner created.
 - Community image and aiak release are locally available and source SHAs resolved.
-- Code and static frontend implemented; local and CI validation in progress.
+- Code and Notion-style static frontend implemented. Local qualification/failure handling tests pass.
+- GitHub-hosted checks passed; self-hosted runner artifact roundtrip passed (40500287026).
+- Self-hosted configuration/build/internal-publication validation passed (40503890924). This was `validate_only=true`, not a GPU benchmark.
+- Internal static service is deployed. Browser checks covered JSON import, CSV export and P/D switching; fixtures were not published.
 - GPU smoke has not run: another user's GPU process was detected. User is coordinating an exclusive window.
 - Full capacity scan, paired P/D results and final real-result publication remain pending that window and smoke validation.

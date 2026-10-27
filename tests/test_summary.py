@@ -30,7 +30,7 @@ class SummaryTests(unittest.TestCase):
             "steady": {"input_throughput": 100, "duration": 130, "average_concurrency": 4},
         }
 
-    def write_repetitions(self, rates: list[float], point: dict | None = None) -> dict:
+    def write_repetitions(self, rates: list[float | None], point: dict | None = None) -> dict:
         base = point if point is not None else self.point
         for repetition, rate in enumerate(rates, 1):
             record = copy.deepcopy(base)
@@ -84,6 +84,16 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(report["points"][0]["status"], "invalid")
         self.assertIsNone(report["points"][0]["throughput"])
         self.assertEqual(report["series"], [])
+
+    def test_one_failed_repeat_disqualifies_other_successful_repeats(self) -> None:
+        self.write_repetitions([100, 100, 100])
+        failure = copy.deepcopy(self.point)
+        failure.update(repetition=4, status="failed", error="request failed")
+        directory = self.root / failure["run_id"] / "community-4"
+        directory.mkdir()
+        (directory / "point.json").write_text(json.dumps(failure), encoding="utf-8")
+        report = summarize.build_summary(self.root, self.root / "summary.json")
+        self.assertFalse(report["series"][0]["stable"])
 
 
 if __name__ == "__main__":
