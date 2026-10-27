@@ -17,7 +17,7 @@ Implementation decisions:
 
 - JSON configs use the Python standard library; no YAML/config abstraction.
 - One fixed community client image runs against both engine images.
-- Native `steady_state_serving` replaces a custom window extractor. Qualification uses ≥3 native steady intervals of ≥120 seconds and repeat CV ≤5%. No within-window CV claim.
+- Native `steady_state_serving` replaces a custom window extractor. Qualification uses ≥3 native full measurements after warmup, each ≥120 seconds, and repeat CV ≤5%. Native longest intervals remain diagnostic.
 - D uses native fake KV, real expert routing, MTP off. No estimated acceptance or GPU multiplier.
 - Sweep boundaries are displayed; only measured, qualified points may rank.
 - UI follows the user's Notion-style requirement: monochrome, normal-size field labels and columns, no explanatory captions or footnotes.
@@ -31,9 +31,9 @@ Status:
 - GitHub-hosted checks passed; self-hosted runner artifact roundtrip passed (40500287026).
 - Self-hosted configuration/build/internal-publication validation passed (40503890924). This was `validate_only=true`, not a GPU benchmark.
 - Internal static service is deployed. Browser checks covered JSON import, CSV export and P/D switching; fixtures were not published.
-- The user authorized the overnight eight-GPU run. GPU smoke validation is in progress; earlier native CLI compatibility failures are retained as evidence.
+- The user authorized the overnight eight-GPU run. Community P/D and AIAK D smoke passed; AIAK release P has a reproducible completion-path defect. Earlier native CLI failures are retained as evidence.
 - Fixed-length offline input generation has been verified with the pinned native client for 1Ki/64Ki inputs and 1/512 outputs.
-- Full capacity scanning is gated on all eight community/aiak P/D smoke points succeeding.
+- Capacity scanning proceeds only for the three engine/phase pairs with successful smoke points. AIAK release P remains failed; a separately identified hotfix needs a baseline decision.
 
 ## Authorized overnight run — 2026-10-27
 
@@ -41,9 +41,11 @@ User authorized the eight-GPU run and termination of other GPU compute processes
 
 - Update the existing ownership check in `scripts/run_benchmark.py` with an explicit root-only termination option. Default behavior remains refusal. Use native signals against the exact observed PIDs, with process-identity checks, and record any interference.
 - Validate and run community/aiak P/D smoke; resolve launch/client incompatibilities using native flags.
-- Run the fixed 64Ki workload, concurrency scan and repeated measurements. Increase request counts if native steady intervals are too short; retain failed/contaminated measurements.
+- Run the fixed 64Ki workload, concurrency scan and repeated measurements. Increase request counts if native full measurements are too short; retain failed/contaminated measurements.
 - Publish real summaries to the existing internal static site and preserve raw evidence.
 - Risks: shared jobs may restart; terminating an in-flight foreign process does not make an overlapping measurement valid. Such points must fail rather than enter capacity rankings.
 - Observed cold-start DeepGEMM compilation takes 10–20 minutes. Reuse per-engine native cache directories through Docker bind mounts during this overnight run; remove the task-owned caches after completion.
-- Capacity points start with a bounded native request count and increase it when the native steady interval is below 120 seconds, targeting 150 seconds. Preserve every native attempt and reuse the chosen count for subsequent repetitions; do not reduce the qualification threshold.
+- Capacity points start with a bounded native request count and increase it when the native full timed measurement is below 120 seconds, targeting 150 seconds. Preserve every native attempt and reuse the chosen count for subsequent repetitions; do not reduce the qualification threshold.
 - Update `web/app.js` filter ordering so the selected profile determines available contexts, and new page loads prefer the most recent comparison group. This keeps real 64Ki capacity runs visible alongside earlier 1Ki smoke and diagnostic runs.
+- AIAK release P fails when a request finishes during prefill: the frozen result-processor dataclass has no `server_args`, but its one-token completion branch reads `self.server_args.enable_metrics`. Preserve the release failure. Continue both validated D scans and community P; prepare a reviewable one-line native-component fix separately before deciding whether a hotfix comparison is acceptable.
+- Real closed-loop D evidence invalidated the original continuous-interval gate: concurrency1 smoke took 1.373s overall but its longest native interval was 0.179s; the first 64Ki capacity attempt completed16 requests in41.379s and again selected only a single-request interval. More requests cannot bridge the idle gaps between sequential requests. Change `scripts/run_benchmark.py`, `scripts/summarize.py`, configs, tests and UI terminology to rank the native full timed measurement after warmup, require >=120s per repeat and CV<=5%, and retain native longest intervals only as diagnostics. Derive full-window mean active concurrency from completed × mean native E2E latency / native duration. Include measurement basis in comparison keys so old and new metrics never merge.

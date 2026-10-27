@@ -52,6 +52,8 @@ function render() {
     point.run_id === controls.run.value);
   document.querySelector("#dataset-mode").textContent = visiblePoints[0]?.dataset === "random-ids"
     ? "随机 Token IDs" : visiblePoints[0]?.dataset || "—";
+  document.querySelector("#measurement-mode").textContent = visiblePoints[0]?.measurement_basis === "native-full-run"
+    ? "完整计时" : visiblePoints.length ? "连续稳态" : "—";
   const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
   const peaks = {};
   for (const engine of Object.keys(names)) {

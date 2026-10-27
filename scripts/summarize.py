@@ -27,7 +27,7 @@ def build_summary(source: Path, destination: Path) -> dict:
             )
         }
         key_fields.update({key: point.get(key) for key in (
-            "dataset", "tokenized_prompt", "random_range_ratio",
+            "dataset", "tokenized_prompt", "random_range_ratio", "measurement_basis",
         )})
         comparison_key = hashlib.sha256(json.dumps(key_fields, sort_keys=True).encode()).hexdigest()[:20]
         public = {key: point[key] for key in (
@@ -36,6 +36,7 @@ def build_summary(source: Path, destination: Path) -> dict:
             "output_length", "concurrency", "repetition", "gpu_count", "status",
         )}
         public["dataset"] = point.get("dataset")
+        public["measurement_basis"] = point.get("measurement_basis", "native-steady-interval")
         # Full diagnostic strings may contain local paths; keep them in local raw evidence.
         public.update(comparison_key=comparison_key, error="See local run evidence" if point["error"] else None,
                       throughput=None, full_throughput=None, duration=None, ttft_ms=None, tpot_ms=None,
@@ -43,14 +44,16 @@ def build_summary(source: Path, destination: Path) -> dict:
         if point["status"] == "ok":
             metric = "input_throughput" if point["phase"] == "P" else "output_throughput"
             steady = point["steady"]
+            measurement = point.get("measurement", steady)
             public.update(
-                throughput=steady[metric], full_throughput=point["metrics"][metric],
-                duration=steady["duration"], average_concurrency=steady["average_concurrency"],
+                throughput=measurement[metric], full_throughput=point["metrics"][metric],
+                duration=measurement["duration"], average_concurrency=measurement["average_concurrency"],
+                native_steady_throughput=steady[metric], native_steady_duration=steady["duration"],
                 ttft_ms=point["metrics"]["mean_ttft_ms"],
                 tpot_ms=point["metrics"]["mean_tpot_ms"] if point["output_length"] > 1 else None,
             )
             if public["throughput"] is None or not math.isfinite(public["throughput"]) or public["throughput"] <= 0:
-                public.update(status="invalid", error="No usable native steady-state interval", throughput=None)
+                public.update(status="invalid", error="No usable native measurement interval", throughput=None)
         if public["status"] == "ok":
             groups[(comparison_key, point["engine"], point["run_id"], point["concurrency"])].append((public, point))
         else:
@@ -65,7 +68,9 @@ def build_summary(source: Path, destination: Path) -> dict:
             representative["profile"] == "capacity"
             and (comparison_key, engine, run_id, concurrency) not in failed_groups
             and len({sample[0]["repetition"] for sample in samples}) >= 3
-            and all(sample[0]["duration"] >= sample[1]["min_steady_seconds"] for sample in samples)
+            and all(sample[0]["duration"] >= sample[1].get(
+                "min_measurement_seconds", sample[1].get("min_steady_seconds", 120)
+            ) for sample in samples)
             and all(sample[0]["average_concurrency"] >= 0.8 * concurrency for sample in samples)
             and cv is not None and cv <= raw_point["max_cv"]
         )
@@ -74,7 +79,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         series.append({
             **{key: representative[key] for key in (
                 "model", "model_revision", "phase", "profile", "input_length", "output_length",
-                "measurement_mode", "precision", "gpu_count", "engine_sha",
+                "measurement_mode", "measurement_basis", "precision", "gpu_count", "engine_sha",
             )},
             "comparison_key": comparison_key, "engine": engine, "run_id": run_id, "concurrency": concurrency,
             "throughput": statistics.median(rates), "min": min(rates), "max": max(rates),
@@ -87,7 +92,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         "schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
         "points": points, "series": series,
         "failures": [{key: failure[key] for key in ("run_id", "engine", "phase", "status", "stage")} for failure in failures],
-        "method": "Native SGLang steady-state interval (>=80% peak concurrency); capacity qualification requires >=3 repeats, each >=120s, repeat CV<=5%, >=80% target concurrency. Smoke is never ranked as capacity.",
+        "method": "Native SGLang full timed measurement after warmup; capacity qualification requires >=3 repeats, each >=120s, repeat CV<=5%, average active concurrency>=80% target. Native longest intervals remain diagnostic; legacy interval metrics use separate comparison keys. Smoke is never ranked as capacity.",
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")

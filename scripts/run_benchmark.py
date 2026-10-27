@@ -26,7 +26,7 @@ def validate_config(config: dict) -> None:
         "model_name", "model_path", "model_revision", "precision", "gpu_ids",
         "port", "output_dir", "client_image", "engines", "server_args",
         "phase_args", "input_length", "decode_output_length", "concurrencies",
-        "num_prompts", "repetitions", "min_steady_seconds", "max_cv",
+        "num_prompts", "repetitions", "min_measurement_seconds", "max_cv",
         "startup_timeout_seconds", "point_timeout_seconds",
     )
     missing = [key for key in required if key not in config]
@@ -50,8 +50,8 @@ def validate_config(config: dict) -> None:
         raise ValueError("gpu_ids must contain nonnegative integers")
     if not 1024 <= config["port"] <= 65535:
         raise ValueError("port must be between 1024 and 65535")
-    if not 0 < config["max_cv"] <= 0.05 or config["min_steady_seconds"] < 120:
-        raise ValueError("Capacity qualification needs min_steady_seconds >= 120 and 0 < max_cv <= 0.05")
+    if not 0 < config["max_cv"] <= 0.05 or config["min_measurement_seconds"] < 120:
+        raise ValueError("Capacity qualification needs min_measurement_seconds >= 120 and 0 < max_cv <= 0.05")
     if not Path(config["model_path"]).joinpath("config.json").is_file():
         raise ValueError("model_path must contain config.json")
     if len({engine["id"] for engine in config["engines"]}) != len(config["engines"]):
@@ -147,7 +147,8 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "gpu_count": len(config["gpu_ids"]), "hardware": manifest["hardware"],
         "seed": 42, "status": "running", "error": None,
         "dataset": "random-ids", "tokenized_prompt": True, "random_range_ratio": 1.0,
-        "min_steady_seconds": config["min_steady_seconds"], "max_cv": config["max_cv"],
+        "measurement_basis": "native-full-run",
+        "min_measurement_seconds": config["min_measurement_seconds"], "max_cv": config["max_cv"],
         "server_args": config["server_args"] + config["phase_args"][phase],
     }
     save_json(point_dir / "point.json", point)
@@ -212,23 +213,34 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
             measured = {key: raw[key] for key in (
                 "duration", "completed", "total_input_tokens", "total_output_tokens",
                 "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
+                "mean_e2e_latency_ms",
             )}
             steady = {key: steady[key] for key in (
                 "input_throughput", "output_throughput", "duration", "average_concurrency",
             )}
             if any(value is not None and not math.isfinite(value) for value in [*measured.values(), *steady.values()]):
                 raise ValueError("Native metrics contain a non-finite number")
+            if measured["duration"] <= 0 or not measured["mean_e2e_latency_ms"]:
+                raise ValueError("Native duration and mean E2E latency must be positive")
+            measurement = {
+                "duration": measured["duration"],
+                "input_throughput": measured["input_throughput"],
+                "output_throughput": measured["output_throughput"],
+                "average_concurrency": measured["completed"] * measured["mean_e2e_latency_ms"]
+                / (1000 * measured["duration"]),
+            }
             attempts[-1]["steady"] = steady
+            attempts[-1]["measurement"] = measurement
             save_json(point_dir / "command.json", {"argv": command, "attempts": attempts})
-            if profile == "smoke" or (steady["duration"] or 0) >= config["min_steady_seconds"]:
+            if profile == "smoke" or measurement["duration"] >= config["min_measurement_seconds"]:
                 break
             next_prompts = min(16384, math.ceil(
-                prompts * config["min_steady_seconds"] * 1.25 / max(steady["duration"] or 0, 1)
-            ))
+                prompts * config["min_measurement_seconds"] * 1.25 / measurement["duration"] / concurrency
+            ) * concurrency)
             if next_prompts <= prompts:
                 break
             prompts = next_prompts
-        point.update(status="ok", metrics=measured, steady=steady)
+        point.update(status="ok", metrics=measured, steady=steady, measurement=measurement)
     except KeyboardInterrupt:
         point.update(status="cancelled", error="Cancelled")
         raise

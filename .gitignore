@@ -6,6 +6,7 @@ results/
 site/
 *.local.json
 *.local.md
+*.local.patch
 *.log
 .env*
 !.env.example

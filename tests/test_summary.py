@@ -95,6 +95,34 @@ class SummaryTests(unittest.TestCase):
         report = summarize.build_summary(self.root, self.root / "summary.json")
         self.assertFalse(report["series"][0]["stable"])
 
+    def test_full_measurement_qualifies_despite_fragmented_diagnostic_intervals(self) -> None:
+        self.point.update(
+            measurement_basis="native-full-run", min_measurement_seconds=120,
+            measurement={"input_throughput": 95, "duration": 150, "average_concurrency": 3.9},
+        )
+        self.point["steady"]["duration"] = 0.2
+        report = self.write_repetitions([1000, 2000, 3000])
+        self.assertTrue(report["series"][0]["stable"])
+        self.assertEqual(report["series"][0]["throughput"], 95)
+        self.assertEqual(report["points"][0]["native_steady_duration"], 0.2)
+        self.assertEqual(report["points"][0]["duration"], 150)
+
+    def test_short_full_measurements_never_borrow_legacy_interval_qualification(self) -> None:
+        self.point.update(
+            measurement_basis="native-full-run", min_measurement_seconds=120,
+            measurement={"input_throughput": 95, "duration": 119, "average_concurrency": 4},
+        )
+        self.assertFalse(self.write_repetitions([100] * 3)["series"][0]["stable"])
+
+    def test_measurement_bases_have_distinct_comparison_keys(self) -> None:
+        first = self.write_repetitions([100])
+        self.point.update(
+            measurement_basis="native-full-run", min_measurement_seconds=120,
+            measurement={"input_throughput": 100, "duration": 130, "average_concurrency": 4},
+        )
+        second = self.write_repetitions([100])
+        self.assertNotEqual(first["points"][0]["comparison_key"], second["points"][0]["comparison_key"])
+
 
 if __name__ == "__main__":
     unittest.main()

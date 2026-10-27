@@ -72,8 +72,8 @@
   ],
   "num_prompts": 256,
   "repetitions": 3,
-  "min_steady_seconds": 120,
   "max_cv": 0.05,
   "startup_timeout_seconds": 1800,
-  "point_timeout_seconds": 1800
+  "point_timeout_seconds": 1800,
+  "min_measurement_seconds": 120
 }

@@ -23,7 +23,7 @@
       <label>比较条件<select id="comparison"><option>—</option></select></label>
       <label>运行<select id="run"><option>—</option></select></label>
     </section>
-    <dl class="conditions"><div><dt>输入分布</dt><dd id="dataset-mode">—</dd></div><div><dt>KV</dt><dd id="kv-mode">真实</dd></div><div><dt>专家路由</dt><dd>真实</dd></div><div><dt>MTP</dt><dd>关闭</dd></div><div><dt>Prefix cache</dt><dd>关闭</dd></div><div><dt>延迟门槛</dt><dd>无</dd></div></dl>
+    <dl class="conditions"><div><dt>输入分布</dt><dd id="dataset-mode">—</dd></div><div><dt>计时口径</dt><dd id="measurement-mode">—</dd></div><div><dt>KV</dt><dd id="kv-mode">真实</dd></div><div><dt>专家路由</dt><dd>真实</dd></div><div><dt>MTP</dt><dd>关闭</dd></div><div><dt>Prefix cache</dt><dd>关闭</dd></div><div><dt>延迟门槛</dt><dd>无</dd></div></dl>
     <section class="metrics" id="metrics">
       <article><h2>Community · 合格峰值</h2><div class="metric-value" id="community-value">—</div></article>
       <article><h2>AIAK · 合格峰值</h2><div class="metric-value" id="aiak-value">—</div></article>
@@ -36,13 +36,13 @@
     </section>
     <section class="table-panel">
       <div class="panel-heading"><h2>测试明细 <span id="point-count">0</span></h2><button id="download-csv">导出 CSV ↗</button></div>
-      <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th>吞吐 (tok/s)</th><th>稳态 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th>吞吐 (tok/s)</th><th>测量 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
       <div class="table-empty" id="table-empty">暂无记录</div>
     </section>
     <section id="failure-panel" hidden><h2>启动失败</h2><table><thead><tr><th>运行</th><th>引擎</th><th>阶段</th></tr></thead><tbody id="failure-rows"></tbody></table></section>
     <div id="error" role="alert" hidden></div>
   </main>
-  <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><h2>测量口径</h2><table><tbody><tr><th>Prefill</th><td>固定输入，输出 1 token；输入 tokens/s</td></tr><tr><th>Decode</th><td>合成 KV，真实专家路由；输出 tokens/s</td></tr><tr><th>稳态区间</th><td>原生客户端提取：并发 ≥峰值 80% 的最长连续区间</td></tr><tr><th>合格容量</th><td>≥3 次独立重复；每次稳态 ≥120 s；平均并发 ≥目标 80%；跨重复 CV ≤5%；请求全部成功</td></tr><tr><th>吞吐比</th><td>同一运行、同一比较条件下，两套引擎各自的已测合格峰值之比</td></tr><tr><th>原始证据</th><td>保存在内网运行目录</td></tr></tbody></table></dialog>
+  <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><h2>测量口径</h2><table><tbody><tr><th>Prefill</th><td>固定输入，输出 1 token；输入 tokens/s</td></tr><tr><th>Decode</th><td>合成 KV，真实专家路由；输出 tokens/s</td></tr><tr><th>完整计时</th><td>原生客户端预热后的完整测量区间</td></tr><tr><th>合格容量</th><td>≥3 次独立重复；每次完整计时 ≥120 s；平均并发 ≥目标 80%；跨重复 CV ≤5%；请求全部成功</td></tr><tr><th>吞吐比</th><td>同一运行、同一比较条件下，两套引擎各自的已测合格峰值之比</td></tr><tr><th>原始证据</th><td>保存在内网运行目录</td></tr></tbody></table></dialog>
   <script type="module" src="./app.js"></script>
 </body>
 </html>
