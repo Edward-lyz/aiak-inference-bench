@@ -136,6 +136,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
     point = {
         "schema_version": 1, "run_id": run_dir.name, "timestamp": datetime.now(timezone.utc).isoformat(),
         "engine": engine["id"], "engine_sha": manifest["engines"][engine["id"]]["source_sha"],
+        "engine_variant": engine.get("variant", "unmodified"),
         "image_id": manifest["engines"][engine["id"]]["id"], "client_image_id": client_image,
         "model": config["model_name"], "model_revision": config["model_revision"],
         "model_config_sha256": manifest["model_config_sha256"], "precision": config["precision"],

@@ -2,6 +2,14 @@
 
 Updated: 2026-10-27 (Asia/Shanghai).
 
+## Prefill continuation — 2026-10-28
+
+- User requested continuing after the hotfix proposal. Build an isolated local AIAK derivative from the pinned release with only the prepared metrics-guard patch; commit that change inside its source tree so source SHA differs. Preserve the original release image and its failure.
+- Update `scripts/run_benchmark.py`, `scripts/summarize.py`, and `web/app.js` to carry and display an explicit engine variant. Keep comparison conditions identical while recording each engine's source and image identities.
+- Update ignored P configs to specify an available native `--nccl-port`; the overnight community P failed with EADDRINUSE on randomly selected27043.
+- Run AIAK hotfix P smoke, then a fresh paired community/hotfix P capacity run. Publish results with the hotfix label; never describe them as unmodified release performance.
+- Risks: another shared process can claim the selected port, 64Ki prefill can expose new engine failures, or high concurrency can exceed the point timeout. Retain failures and validate each measured point.
+
 User approved implementation in `PUBLIC_REPO/aiak-inference-bench`, with DeepSeek-V4.1-Flash, an internal mirror of community nightly and an aiak_sglang release. GitHub repository is private under Edward-lyz; results stay internal.
 
 | Files | Previous behavior | Intended behavior | Risks / validation |

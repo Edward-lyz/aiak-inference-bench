@@ -36,6 +36,7 @@ def build_summary(source: Path, destination: Path) -> dict:
             "output_length", "concurrency", "repetition", "gpu_count", "status",
         )}
         public["dataset"] = point.get("dataset")
+        public["engine_variant"] = point.get("engine_variant", "unmodified")
         public["measurement_basis"] = point.get("measurement_basis", "native-steady-interval")
         # Full diagnostic strings may contain local paths; keep them in local raw evidence.
         public.update(comparison_key=comparison_key, error="See local run evidence" if point["error"] else None,
@@ -79,7 +80,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         series.append({
             **{key: representative[key] for key in (
                 "model", "model_revision", "phase", "profile", "input_length", "output_length",
-                "measurement_mode", "measurement_basis", "precision", "gpu_count", "engine_sha",
+                "measurement_mode", "measurement_basis", "precision", "gpu_count", "engine_sha", "engine_variant",
             )},
             "comparison_key": comparison_key, "engine": engine, "run_id": run_id, "concurrency": concurrency,
             "throughput": statistics.median(rates), "min": min(rates), "max": max(rates),

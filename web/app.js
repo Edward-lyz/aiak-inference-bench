@@ -55,6 +55,10 @@ function render() {
   document.querySelector("#measurement-mode").textContent = visiblePoints[0]?.measurement_basis === "native-full-run"
     ? "完整计时" : visiblePoints.length ? "连续稳态" : "—";
   const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
+  const aiakVariant = visiblePoints.find(point => point.engine === "aiak")?.engine_variant;
+  const aiakLabel = aiakVariant && aiakVariant !== "unmodified" ? "AIAK Hotfix" : "AIAK";
+  document.querySelector("#aiak-title").textContent = `${aiakLabel} · 合格峰值`;
+  document.querySelector("#ratio-title").textContent = `${aiakLabel} / Community`;
   const peaks = {};
   for (const engine of Object.keys(names)) {
     peaks[engine] = latestSeries.filter(series => series.engine === engine && series.stable)
@@ -69,7 +73,7 @@ function render() {
   document.querySelector("#ratio-value").textContent = canCompare ? `${(peaks.aiak.throughput / peaks.community.throughput).toFixed(2)}×` : "—";
   document.querySelector("#empty").hidden = latestSeries.length > 0;
   const chartSeries = Object.keys(names).flatMap(engine => [true, false].map(stable => ({
-    name: names[engine] + (stable ? "" : " · 未验证"),
+    name: (engine === "aiak" ? aiakLabel : names[engine]) + (stable ? "" : " · 未验证"),
     type: "line", symbol: "circle", symbolSize: 7, connectNulls: false,
     itemStyle: { color: colors[engine] }, lineStyle: { color: colors[engine], width: 2, type: stable ? "solid" : "dashed" },
     data: latestSeries.filter(series => series.engine === engine).sort((a, b) => a.concurrency - b.concurrency)
@@ -91,6 +95,9 @@ function render() {
     engineCell.textContent = names[point.engine] || point.engine;
     row.append(engineCell);
     const version = document.createElement("td"); version.className = "version"; version.textContent = point.engine_sha.slice(0, 10);
+    if (point.engine_variant && point.engine_variant !== "unmodified") {
+      version.textContent += ` · ${point.engine_variant}`;
+    }
     row.append(version);
     for (const value of [point.concurrency, point.throughput, point.duration, point.ttft_ms, point.tpot_ms]) {
       const cell = document.createElement("td"); cell.textContent = value == null ? "—" : format.format(value); row.append(cell);
@@ -160,7 +167,7 @@ document.querySelector("#refresh").addEventListener("click", loadReport);
 document.querySelector("#method-button").addEventListener("click", () => document.querySelector("#method-dialog").showModal());
 document.querySelector("#download").addEventListener("click", () => download(JSON.stringify(report, null, 2), "summary.json", "application/json"));
 document.querySelector("#download-csv").addEventListener("click", () => {
-  const columns = ["run_id", "engine", "engine_sha", "model", "phase", "profile", "input_length", "concurrency", "repetition", "status", "stable", "throughput", "duration", "ttft_ms", "tpot_ms"];
+  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "measurement_basis", "input_length", "concurrency", "repetition", "status", "stable", "throughput", "duration", "ttft_ms", "tpot_ms"];
   const csv = [columns, ...visiblePoints.map(point => columns.map(key => point[key] ?? ""))]
     .map(row => row.map(value => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`).join(",")).join("\r\n");
   download("\uFEFF" + csv, "points.csv", "text/csv;charset=utf-8");

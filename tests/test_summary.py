@@ -123,6 +123,12 @@ class SummaryTests(unittest.TestCase):
         second = self.write_repetitions([100])
         self.assertNotEqual(first["points"][0]["comparison_key"], second["points"][0]["comparison_key"])
 
+    def test_hotfix_identity_survives_public_export(self) -> None:
+        self.point["engine_variant"] = "metrics-guard-hotfix"
+        report = self.write_repetitions([100] * 3)
+        self.assertEqual(report["points"][0]["engine_variant"], "metrics-guard-hotfix")
+        self.assertEqual(report["series"][0]["engine_variant"], "metrics-guard-hotfix")
+
 
 if __name__ == "__main__":
     unittest.main()
