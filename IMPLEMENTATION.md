@@ -1,6 +1,6 @@
 # Implementation plan and status
 
-Updated: 2026-10-27 (Asia/Shanghai).
+Updated: 2026-10-28 (Asia/Shanghai).
 
 ## Prefill continuation — 2026-10-28
 
@@ -10,6 +10,7 @@ Updated: 2026-10-27 (Asia/Shanghai).
 - Run AIAK hotfix P smoke, then a fresh paired community/hotfix P capacity run. Publish results with the hotfix label; never describe them as unmodified release performance.
 - Risks: another shared process can claim the selected port, 64Ki prefill can expose new engine failures, or high concurrency can exceed the point timeout. Retain failures and validate each measured point.
 - Before the new capacity run, reduce initial native requests from 8× to 4× concurrency in `scripts/run_benchmark.py`. The full-window method already checks measured average concurrency≥80%; four waves reduce expensive Prefill drain overhead while retaining that gate and adaptive≥120s timing. Update README's recipe; keep original Decode evidence intact. P point timeout becomes3600s to accommodate the high-concurrency workload.
+- Validation: complete paired Decode sweep passed all48 repeats and qualified all16 points; internal raw token counts and runtime settings verified. Isolated AIAK hotfix source differs from the pinned release by exactly one insertion/one deletion; both P smoke pairs passed on GPU. Paired64Ki P capacity scan is running and is not yet a completed result.12 summary tests, frontend build, and GitHub CI passed.
 
 User approved implementation in `PUBLIC_REPO/aiak-inference-bench`, with DeepSeek-V4.1-Flash, an internal mirror of community nightly and an aiak_sglang release. GitHub repository is private under Edward-lyz; results stay internal.
 

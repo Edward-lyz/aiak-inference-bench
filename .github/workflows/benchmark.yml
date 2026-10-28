@@ -34,10 +34,10 @@ jobs:
       ENGINE: ${{ inputs.engine }}
       PHASE: ${{ inputs.phase }}
       VALIDATE_ONLY: ${{ inputs.validate_only }}
-      BENCH_CONFIG: ${{ vars.BENCH_CONFIG }}
-      BENCH_SMOKE_CONFIG: ${{ vars.BENCH_SMOKE_CONFIG }}
-      BENCH_RESULTS_DIR: ${{ vars.BENCH_RESULTS_DIR }}
-      BENCH_SITE_DIR: ${{ vars.BENCH_SITE_DIR }}
+      BENCH_CONFIG: ${{ secrets.BENCH_CONFIG }}
+      BENCH_SMOKE_CONFIG: ${{ secrets.BENCH_SMOKE_CONFIG }}
+      BENCH_RESULTS_DIR: ${{ secrets.BENCH_RESULTS_DIR }}
+      BENCH_SITE_DIR: ${{ secrets.BENCH_SITE_DIR }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
