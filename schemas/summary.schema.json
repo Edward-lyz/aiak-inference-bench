@@ -2,24 +2,70 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AIAK inference benchmark dashboard summary",
   "type": "object",
-  "required": ["schema_version", "generated_at", "method", "points", "series", "failures"],
+  "required": [
+    "schema_version",
+    "generated_at",
+    "method",
+    "points",
+    "series",
+    "failures"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "generated_at": {"type": "string", "format": "date-time"},
-    "method": {"type": "string"},
-    "points": {"type": "array", "items": {"$ref": "#/$defs/point"}},
-    "series": {"type": "array", "items": {"$ref": "#/$defs/series"}},
+    "schema_version": {
+      "const": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "method": {
+      "type": "string"
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/point"
+      }
+    },
+    "series": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/series"
+      }
+    },
     "failures": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["run_id", "engine", "phase", "status", "stage"],
+        "required": [
+          "run_id",
+          "engine",
+          "phase",
+          "status",
+          "stage"
+        ],
         "properties": {
-          "run_id": {"type": "string"},
-          "engine": {"enum": ["community", "aiak"]},
-          "phase": {"enum": ["P", "D"]},
-          "status": {"const": "failed"},
-          "stage": {"const": "server"}
+          "run_id": {
+            "type": "string"
+          },
+          "engine": {
+            "enum": [
+              "community",
+              "aiak"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "P",
+              "D"
+            ]
+          },
+          "status": {
+            "const": "failed"
+          },
+          "stage": {
+            "const": "server"
+          }
         },
         "additionalProperties": false
       }
@@ -27,37 +73,226 @@
   },
   "additionalProperties": false,
   "$defs": {
-    "nullableNumber": {"type": ["number", "null"]},
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "point": {
       "type": "object",
-      "required": ["run_id", "engine", "engine_sha", "phase", "profile", "comparison_key", "status", "stable", "throughput", "concurrency", "repetition"],
+      "required": [
+        "run_id",
+        "engine",
+        "engine_sha",
+        "phase",
+        "profile",
+        "comparison_key",
+        "status",
+        "stable",
+        "throughput",
+        "concurrency",
+        "repetition"
+      ],
       "properties": {
-        "engine": {"enum": ["community", "aiak"]},
-        "engine_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
-        "phase": {"enum": ["P", "D"]},
-        "profile": {"enum": ["smoke", "capacity"]},
-        "measurement_mode": {"enum": ["client", "client-synthetic-kv"]},
-        "comparison_key": {"type": "string", "pattern": "^[a-f0-9]{20}$"},
-        "status": {"enum": ["running", "ok", "failed", "invalid", "cancelled"]},
-        "stable": {"type": "boolean"},
-        "throughput": {"$ref": "#/$defs/nullableNumber"},
-        "full_throughput": {"$ref": "#/$defs/nullableNumber"},
-        "duration": {"$ref": "#/$defs/nullableNumber"},
-        "ttft_ms": {"$ref": "#/$defs/nullableNumber"},
-        "tpot_ms": {"$ref": "#/$defs/nullableNumber"},
-        "concurrency": {"type": "integer", "minimum": 1},
-        "repetition": {"type": "integer", "minimum": 1}
+        "engine": {
+          "enum": [
+            "community",
+            "aiak"
+          ]
+        },
+        "engine_sha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "phase": {
+          "enum": [
+            "P",
+            "D"
+          ]
+        },
+        "profile": {
+          "enum": [
+            "smoke",
+            "capacity"
+          ]
+        },
+        "measurement_mode": {
+          "enum": [
+            "client",
+            "client-synthetic-kv",
+            "real-prefill-decode-latency"
+          ]
+        },
+        "comparison_key": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{20}$"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "ok",
+            "failed",
+            "invalid",
+            "cancelled"
+          ]
+        },
+        "stable": {
+          "type": "boolean"
+        },
+        "throughput": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "full_throughput": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "duration": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "ttft_ms": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "tpot_ms": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repetition": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "protocol_id": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speculative_algorithm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speculative_block_size": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "dataset_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric_name": {
+          "type": "string"
+        },
+        "metric_unit": {
+          "type": "string"
+        },
+        "metric_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lower_is_better": {
+          "type": "boolean"
+        },
+        "accept_length": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
       }
     },
     "series": {
       "type": "object",
-      "required": ["run_id", "engine", "comparison_key", "throughput", "stable", "cv", "repeats"],
+      "required": [
+        "run_id",
+        "engine",
+        "comparison_key",
+        "throughput",
+        "stable",
+        "cv",
+        "repeats"
+      ],
       "properties": {
-        "engine": {"enum": ["community", "aiak"]},
-        "stable": {"type": "boolean"},
-        "throughput": {"type": "number", "exclusiveMinimum": 0},
-        "cv": {"$ref": "#/$defs/nullableNumber"},
-        "repeats": {"type": "integer", "minimum": 1}
+        "engine": {
+          "enum": [
+            "community",
+            "aiak"
+          ]
+        },
+        "stable": {
+          "type": "boolean"
+        },
+        "throughput": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "cv": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "repeats": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "protocol_id": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speculative_algorithm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speculative_block_size": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "dataset_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric_name": {
+          "type": "string"
+        },
+        "metric_unit": {
+          "type": "string"
+        },
+        "metric_value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lower_is_better": {
+          "type": "boolean"
+        },
+        "accept_length": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
       }
     }
   }

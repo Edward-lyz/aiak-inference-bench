@@ -28,6 +28,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         }
         key_fields.update({key: point.get(key) for key in (
             "dataset", "tokenized_prompt", "random_range_ratio", "measurement_basis",
+            "protocol_id", "strategy", "speculative_algorithm", "speculative_block_size", "dataset_sha256",
         )})
         comparison_key = hashlib.sha256(json.dumps(key_fields, sort_keys=True).encode()).hexdigest()[:20]
         public = {key: point[key] for key in (
@@ -38,6 +39,14 @@ def build_summary(source: Path, destination: Path) -> dict:
         public["dataset"] = point.get("dataset")
         public["engine_variant"] = point.get("engine_variant", "unmodified")
         public["measurement_basis"] = point.get("measurement_basis", "native-steady-interval")
+        public.update({key: point.get(key) for key in (
+            "protocol_id", "strategy", "speculative_algorithm", "speculative_block_size", "dataset_sha256",
+            "fake_kv", "fake_ep", "cache_mode",
+        )})
+        latency_metric = point.get("protocol_id") == "sglang-cookbook-v2" and point["phase"] == "D"
+        public.update(metric_name="tpot_ms" if latency_metric else "input_throughput" if point["phase"] == "P" else "output_throughput",
+                      metric_unit="ms" if latency_metric else "tok/s", lower_is_better=latency_metric,
+                      metric_value=None, accept_length=None, p99_tpot_ms=None)
         # Full diagnostic strings may contain local paths; keep them in local raw evidence.
         public.update(comparison_key=comparison_key, error="See local run evidence" if point["error"] else None,
                       throughput=None, full_throughput=None, duration=None, ttft_ms=None, tpot_ms=None,
@@ -52,9 +61,16 @@ def build_summary(source: Path, destination: Path) -> dict:
                 native_steady_throughput=steady[metric], native_steady_duration=steady["duration"],
                 ttft_ms=point["metrics"]["mean_ttft_ms"],
                 tpot_ms=point["metrics"]["mean_tpot_ms"] if point["output_length"] > 1 else None,
+                accept_length=point["metrics"].get("accept_length"),
+                p99_tpot_ms=point["metrics"].get("p99_tpot_ms"),
             )
+            public["metric_value"] = public["tpot_ms"] if latency_metric else public["throughput"]
             if public["throughput"] is None or not math.isfinite(public["throughput"]) or public["throughput"] <= 0:
                 public.update(status="invalid", error="No usable native measurement interval", throughput=None)
+            if public["metric_value"] is None or not math.isfinite(public["metric_value"]) or public["metric_value"] <= 0:
+                public.update(status="invalid", error="No usable native primary metric", metric_value=None)
+            if latency_metric and (not public["accept_length"] or not math.isfinite(public["accept_length"]) or public["accept_length"] <= 0):
+                public.update(status="invalid", error="No native DSpark acceptance measurement")
         if public["status"] == "ok":
             groups[(comparison_key, point["engine"], point["run_id"], point["concurrency"])].append((public, point))
         else:
@@ -63,7 +79,8 @@ def build_summary(source: Path, destination: Path) -> dict:
     series = []
     for (comparison_key, engine, run_id, concurrency), samples in groups.items():
         rates = [sample[0]["throughput"] for sample in samples]
-        cv = statistics.pstdev(rates) / statistics.mean(rates) if len(rates) > 1 else None
+        values = [sample[0]["metric_value"] for sample in samples]
+        cv = statistics.pstdev(values) / statistics.mean(values) if len(values) > 1 else None
         representative, raw_point = samples[0]
         stable = (
             representative["profile"] == "capacity"
@@ -81,9 +98,13 @@ def build_summary(source: Path, destination: Path) -> dict:
             **{key: representative[key] for key in (
                 "model", "model_revision", "phase", "profile", "input_length", "output_length",
                 "measurement_mode", "measurement_basis", "precision", "gpu_count", "engine_sha", "engine_variant",
+                "protocol_id", "strategy", "speculative_algorithm", "speculative_block_size", "dataset_sha256",
+                "metric_name", "metric_unit", "lower_is_better", "fake_kv", "fake_ep", "cache_mode",
             )},
             "comparison_key": comparison_key, "engine": engine, "run_id": run_id, "concurrency": concurrency,
             "throughput": statistics.median(rates), "min": min(rates), "max": max(rates),
+            "metric_value": statistics.median(values),
+            "accept_length": None if representative["accept_length"] is None else statistics.median(s[0]["accept_length"] for s in samples),
             "cv": cv, "repeats": len(rates), "stable": stable,
             "ttft_ms": statistics.median(s[0]["ttft_ms"] for s in samples),
             "tpot_ms": None if representative["tpot_ms"] is None else statistics.median(s[0]["tpot_ms"] for s in samples),
@@ -93,7 +114,7 @@ def build_summary(source: Path, destination: Path) -> dict:
         "schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
         "points": points, "series": series,
         "failures": [{key: failure[key] for key in ("run_id", "engine", "phase", "status", "stage")} for failure in failures],
-        "method": "Native SGLang full timed measurement after warmup; capacity qualification requires >=3 repeats, each >=120s, repeat CV<=5%, average active concurrency>=80% target. Native longest intervals remain diagnostic; legacy interval metrics use separate comparison keys. Smoke is never ranked as capacity.",
+        "method": "Official cookbook strategies: P high-throughput input tok/s; D low-latency DSpark with real Prefill, native TPOT in ms (lower is better). D E2E output throughput is auxiliary. Qualification: >=3 repeats, each >=120s, primary-metric CV<=5%, active concurrency>=80% target. Dataset uses ShareGPT prompts repeated/truncated to fixed lengths. Native acceptance length is reported, never assumed. Retired pre-cookbook evidence is outside the active result root.",
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")

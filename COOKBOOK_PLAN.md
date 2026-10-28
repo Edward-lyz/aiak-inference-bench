@@ -25,7 +25,7 @@ The existing checkpoint is Flash, not Flash-1017. The linked page has two indepe
 ## Prior data and execution
 
 - Stop old running jobs, archive the entire old result directory outside the active scan root, write a retirement reason, and publish an empty current summary. The raw evidence remains available for debugging but cannot enter current rankings.
-- Audit the available community image against official DSpark flags. The cookbook recommends the `dev-dsv41` preview image; pin its content identity if reachable. A network failure must not be represented as successful use of that image.
+- User-selected image source supersedes the cookbook's Docker Hub image: before each run, query the designated community-nightly registry for the latest CUDA13 amd64 nightly. Resolve ties on the newest dated tags using image creation time, verify platform, pull by immutable manifest digest, and use that image for both the community server and the shared native client. Record tag/digest/source SHA. Never switch versions inside a run or silently fall back after a registry failure.
 - Start with community smoke for both new strategies, then validate AIAK compatibility. An incompatible AIAK release is a recorded blocker, never silently run with speculation disabled.
 - Check successful requests, exact token counts, actual speculative acceptance, runtime topology/backends and measurement durations before capacity scans.
 
@@ -35,4 +35,5 @@ The existing checkpoint is Flash, not Flash-1017. The linked page has two indepe
 - Real Prefill changes E2E duration. D must be evaluated from the native TPOT metric, not an assumed acceptance multiplier or fake KV.
 - Existing images may lack cookbook flags or contain release bugs. Keep hotfix identity explicit.
 - Shared GPU interference can invalidate a repeat. Retain failures and do not silently qualify interrupted groups.
+- Shared-host cleanup has removed a required local hotfix image between phases. Keep selected images referenced by temporary CPU-only Docker containers during a run, remove these containers in the run's `finally`, and retain an exact orchestrator source snapshot beside the manifest.
 - Public repositories do not remove all Actions limits. Self-hosted compute is already free; standard GitHub-hosted public runs are free, subject to concurrency and other service limits.

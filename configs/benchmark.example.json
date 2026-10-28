@@ -2,16 +2,12 @@
   "model_name": "DeepSeek-V4.1-Flash",
   "model_path": "/path/to/DeepSeek-V4.1-Flash",
   "model_revision": "set-to-the-weight-revision",
-  "precision": "fp8",
+  "precision": "fp8+fp4-experts",
   "gpu_ids": [
     0,
     1,
     2,
-    3,
-    4,
-    5,
-    6,
-    7
+    3
   ],
   "port": 31080,
   "output_dir": "/path/to/bench-results",
@@ -32,30 +28,33 @@
   ],
   "server_args": [
     "--tp-size",
-    "8",
-    "--mem-fraction-static",
-    "0.8",
-    "--context-length",
-    "69632",
-    "--chunked-prefill-size",
-    "8192",
-    "--disable-radix-cache",
-    "--enable-metrics",
+    "4",
     "--ep-size",
-    "8",
+    "4",
     "--trust-remote-code",
-    "--cuda-graph-max-bs-decode",
-    "128",
-    "--max-running-requests",
-    "128"
+    "--reasoning-parser",
+    "auto",
+    "--tool-call-parser",
+    "auto",
+    "--disable-radix-cache",
+    "--enable-metrics"
   ],
   "phase_args": {
-    "P": [],
+    "P": [
+      "--max-running-requests",
+      "256"
+    ],
     "D": [
-      "--disaggregation-mode",
-      "decode",
-      "--disaggregation-transfer-backend",
-      "fake"
+      "--mem-fraction-static",
+      "0.8",
+      "--speculative-algorithm",
+      "DSPARK",
+      "--speculative-dspark-block-size",
+      "5",
+      "--cuda-graph-max-bs-decode",
+      "64",
+      "--max-running-requests",
+      "48"
     ]
   },
   "input_length": 65536,
@@ -70,10 +69,31 @@
     64,
     128
   ],
-  "num_prompts": 256,
+  "num_prompts": 16,
   "repetitions": 3,
   "max_cv": 0.05,
-  "startup_timeout_seconds": 1800,
-  "point_timeout_seconds": 1800,
-  "min_measurement_seconds": 120
+  "startup_timeout_seconds": 5400,
+  "point_timeout_seconds": 3600,
+  "min_measurement_seconds": 120,
+  "protocol_id": "sglang-cookbook-v2",
+  "recipe_source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/DeepSeek/DeepSeek-V4_1",
+  "dataset_path": "/path/to/ShareGPT_V3_unfiltered_cleaned_split.json",
+  "phase_concurrencies": {
+    "P": [
+      1,
+      4,
+      16,
+      64,
+      256
+    ],
+    "D": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      48
+    ]
+  }
 }

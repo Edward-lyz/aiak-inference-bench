@@ -1,6 +1,8 @@
 # AIAK Inference Bench
 
-Compare community SGLang nightly and an aiak_sglang release on the same model and GPU host. No TTFT/TPOT/OTPS thresholds. This is an independent private benchmark workspace, not an official InferenceX deployment.
+Compare community SGLang and aiak_sglang using the official SGLang cookbook strategies on the same checkpoint and GPU allocation. No TTFT/TPOT/OTPS admission thresholds. This is an independent benchmark, not an official SGLang or InferenceX result.
+
+The code repository is public. Configuration, datasets, raw evidence, results and the dashboard stay internal. All measurements predating the `sglang-cookbook-v2` reset on 2026-10-28 are retired and excluded from current comparisons. See [COOKBOOK_PLAN.md](COOKBOOK_PLAN.md).
 
 ## Run
 
@@ -19,24 +21,28 @@ Use a separate local smoke config with short input/output lengths, a small concu
 
 Images must already be present (`docker pull` explicitly before the run). Each image is resolved to a local content ID, repository digest and source SHA once per run. Both engines use the same community image's native benchmark client. Weights are mounted read-only; keep their revision fixed during the entire run.
 
+For an automatically updated community baseline, set `community_image_repository` to the designated registry/repository. Before each run the native Registry API lists CUDA13 amd64 nightly tags, selects the newest date (image creation time breaks same-date ties), checks the platform, and pulls its immutable digest. The same image is used for the shared native client. The registry must permit anonymous pull-token access; lookup failures stop the run without falling back to an older image. Other engine images must already be present. No version changes during a run.
+
 The optional local `docker_security_opt` field passes a native Docker security option to project containers. B200dev's Docker 20.10.5 requires `seccomp=unconfined` for the newer image to create threads. This disables syscall filtering inside those containers and is recorded in the manifest; use only the trusted benchmark images configured by the operator. A future host runtime upgrade should remove this exception.
 
-Private local configs, results, raw logs and site data are ignored by Git. Repository directory name `PUBLIC_REPO` does not change the GitHub repository's private visibility.
+Private local configs, results, raw logs and site data are ignored by Git. GitHub Actions uses masked secrets for internal paths. Self-hosted GPU jobs remain manual, trusted-main dispatches.
 
 ## What the numbers mean
 
 | Phase | Server | Native client | Reported quantity |
 |---|---|---|---|
-| P | Unified server, cache off, one output token | `sglang.benchmark.steady_state_serving` | Input tokens/s |
-| D | Decode server, `--disaggregation-transfer-backend fake`, real expert routing | Same client, `--fake-prefill` | Output tokens/s, explicitly synthetic KV |
+| P | Official B200 high-throughput: TP4/EP4, max running256, speculation off | `sglang.benchmark.steady_state_serving`, one output token | Input tokens/s, higher is better |
+| D | Official B200 low-latency: TP4/EP4, memory0.8, DSpark block5, decode graph64, max running48 | Same client, real Prefill and generated output | Native mean TPOT in ms, lower is better |
 
-MTP is off. No manual acceptance multiplier or GPU-count multiplier is applied. D synthetic KV measures capacity, not accuracy or production 1P1D throughput. Ordinary long-output E2E tests are not substituted for isolated D.
+Source: [official DeepSeek-V4.1 cookbook](https://lmsysorg.mintlify.app/cookbook/autoregressive/DeepSeek/DeepSeek-V4_1), verified B200 / Flash / FP4 / single-node cells. Flash-1017 is a different checkpoint. The model's speculation is DSpark; the high-throughput recipe intentionally disables it. Native backend selection is preserved and resolved topology/speculation is checked at runtime.
 
-Capacity uses the native client's full timed measurement after warmup. A point requires at least three independent repetitions; every measurement must last ≥120 seconds (`min_measurement_seconds`), average active concurrency must be ≥80% of target, throughput CV across repetitions must be ≤5%, and all requests must succeed. Average active concurrency is computed from native completed requests × mean E2E latency / native duration. The reported value is the median across repetitions.
+The D output-throughput column includes real Prefill and is an E2E auxiliary metric, never isolated Decode throughput. Acceptance length comes from the native client's server-reported value; no assumed acceptance or GPU-count multiplier is used. The default cold-cache benchmark disables prefix reuse as an explicit adaptation to the cookbook serving command. Actual image/source identities, GPU allocation, dataset hash and all launch arguments are recorded.
+
+Capacity uses the native client's full timed measurement after warmup. A point requires at least three independent repetitions; every measurement must last ≥120 seconds (`min_measurement_seconds`), average active concurrency must be ≥80% of target, primary-metric CV across repetitions must be ≤5%, and all requests must succeed. The primary metric is P input throughput or D TPOT. Average active concurrency is computed from native completed requests × mean E2E latency / native duration. The reported value is the median across repetitions.
 
 The native longest continuous interval remains diagnostic. Fixed-length closed-loop requests can split that interval into individual requests or batches, so increasing request count does not necessarily lengthen it. Historical interval-based measurements have different comparison keys and never mix with full-window measurements.
 
-The pinned native client uses `random-ids`, `--tokenize-prompt` and `--random-range-ratio 1`, so input IDs and requested output lengths are fixed without downloading a dataset. EOS is ignored by that client's default behavior.
+The native client uses `random`, a pinned local ShareGPT dataset, `--tokenize-prompt` and `--random-range-ratio 1`. Native sampling repeats or truncates real prompt token sequences to fixed input lengths. This is a controlled synthetic workload; it does not establish production agent-trace acceptance. Dataset contents never enter Git. EOS is ignored by the pinned client's default behavior.
 
 Capacity measurements increase the native request count when a full timed measurement is shorter than the qualification threshold, targeting 150 seconds for a 120-second minimum, with at most three attempts per repetition. All native attempts are retained, and subsequent repetitions reuse the chosen request count. Short full measurements still remain unqualified. The sweep covers only `concurrencies` in the config. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, dataset recipe, workload, client image and shared launch arguments are part of the comparison key.
 

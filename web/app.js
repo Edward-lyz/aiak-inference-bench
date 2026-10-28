@@ -43,46 +43,54 @@ function refreshFilters() {
 
 function render() {
   document.querySelectorAll("[data-phase]").forEach(button => button.classList.toggle("selected", button.dataset.phase === phase));
-  document.querySelector("#kv-mode").textContent = phase === "P" ? "真实" : "合成";
-  document.querySelector("#chart-title").textContent = `${phase === "P" ? "输入" : "输出"}吞吐 (tok/s)`;
+  const latency = phase === "D";
+  const metricUnit = latency ? "ms" : "tok/s";
+  document.querySelector("#chart-title").textContent = latency ? "平均 TPOT (ms) · 越低越好" : "输入吞吐 (tok/s)";
+  document.querySelector("#throughput-heading").textContent = latency ? "端到端输出 (tok/s)" : "输入吞吐 (tok/s)";
   document.querySelector("#metrics").hidden = controls.profile.value === "smoke";
   visiblePoints = report.points.filter(point => point.phase === phase &&
     point.model === controls.model.value && String(point.input_length) === controls.context.value &&
     point.profile === controls.profile.value && point.comparison_key === controls.comparison.value &&
     point.run_id === controls.run.value);
-  document.querySelector("#dataset-mode").textContent = visiblePoints[0]?.dataset === "random-ids"
-    ? "随机 Token IDs" : visiblePoints[0]?.dataset || "—";
+  const sample = visiblePoints[0];
+  document.querySelector("#strategy-mode").textContent = sample?.strategy === "high-throughput" ? "高吞吐" : sample?.strategy === "low-latency" ? "低延迟" : "—";
+  document.querySelector("#kv-mode").textContent = sample ? (sample.fake_kv ? "合成" : "真实") : "—";
+  document.querySelector("#speculation-mode").textContent = sample ? (sample.speculative_algorithm ? `${sample.speculative_algorithm} · ${sample.speculative_block_size}` : "关闭") : "—";
+  document.querySelector("#cache-mode").textContent = sample?.cache_mode === "off" ? "关闭" : sample?.cache_mode || "—";
+  document.querySelector("#dataset-mode").textContent = sample?.dataset === "sharegpt-repeat-truncate" ? "ShareGPT 定长重采样" : sample?.dataset || "—";
   document.querySelector("#measurement-mode").textContent = visiblePoints[0]?.measurement_basis === "native-full-run"
     ? "完整计时" : visiblePoints.length ? "连续稳态" : "—";
   const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
   const aiakVariant = visiblePoints.find(point => point.engine === "aiak")?.engine_variant;
   const aiakLabel = aiakVariant && aiakVariant !== "unmodified" ? "AIAK Hotfix" : "AIAK";
-  document.querySelector("#aiak-title").textContent = `${aiakLabel} · 合格峰值`;
-  document.querySelector("#ratio-title").textContent = `${aiakLabel} / Community`;
+  const bestLabel = latency ? "最低合格 TPOT" : "合格峰值";
+  document.querySelector("#community-title").textContent = `Community · ${bestLabel}`;
+  document.querySelector("#aiak-title").textContent = `${aiakLabel} · ${bestLabel}`;
+  document.querySelector("#ratio-title").textContent = `${aiakLabel} 相对 Community 速度`;
   const peaks = {};
   for (const engine of Object.keys(names)) {
     peaks[engine] = latestSeries.filter(series => series.engine === engine && series.stable)
-      .sort((a, b) => b.throughput - a.throughput)[0];
+      .sort((a, b) => latency ? a.metric_value - b.metric_value : b.metric_value - a.metric_value)[0];
     const value = document.getElementById(`${engine}-value`);
-    value.replaceChildren(document.createTextNode(peaks[engine] ? format.format(peaks[engine].throughput) : "—"));
+    value.replaceChildren(document.createTextNode(peaks[engine] ? format.format(peaks[engine].metric_value) : "—"));
     if (peaks[engine]) {
-      const unit = document.createElement("span"); unit.className = "unit"; unit.textContent = "tok/s"; value.append(unit);
+      const unit = document.createElement("span"); unit.className = "unit"; unit.textContent = metricUnit; value.append(unit);
     }
   }
   const canCompare = peaks.community && peaks.aiak;
-  document.querySelector("#ratio-value").textContent = canCompare ? `${(peaks.aiak.throughput / peaks.community.throughput).toFixed(2)}×` : "—";
+  document.querySelector("#ratio-value").textContent = canCompare ? `${(latency ? peaks.community.metric_value / peaks.aiak.metric_value : peaks.aiak.metric_value / peaks.community.metric_value).toFixed(2)}×` : "—";
   document.querySelector("#empty").hidden = latestSeries.length > 0;
   const chartSeries = Object.keys(names).flatMap(engine => [true, false].map(stable => ({
     name: (engine === "aiak" ? aiakLabel : names[engine]) + (stable ? "" : " · 未验证"),
     type: "line", symbol: "circle", symbolSize: 7, connectNulls: false,
     itemStyle: { color: colors[engine] }, lineStyle: { color: colors[engine], width: 2, type: stable ? "solid" : "dashed" },
     data: latestSeries.filter(series => series.engine === engine).sort((a, b) => a.concurrency - b.concurrency)
-      .map(series => [series.concurrency, series.stable === stable ? series.throughput : null]),
+      .map(series => [series.concurrency, series.stable === stable ? series.metric_value : null]),
   })));
   chart.setOption({
     animation: false, textStyle: { fontFamily: "system-ui" },
     grid: { left: 76, right: 35, top: 32, bottom: 48 },
-    tooltip: { trigger: "axis", valueFormatter: value => value == null ? "—" : `${format.format(value)} tok/s` },
+    tooltip: { trigger: "axis", valueFormatter: value => value == null ? "—" : `${format.format(value)} ${metricUnit}` },
     xAxis: { type: "log", logBase: 2, min: 1, max: Math.max(2, ...latestSeries.map(s => s.concurrency)), name: "并发", nameLocation: "middle", nameGap: 32, nameTextStyle: { color: "#787774", fontSize: 14 }, axisLabel: { color: "#787774", fontSize: 14 }, axisTick: { show: false }, axisLine: { lineStyle: { color: "#e9e9e7" } }, splitLine: { show: false } },
     yAxis: { type: "value", min: 0, axisLabel: { color: "#787774", fontSize: 14, formatter: value => value >= 1000 ? `${value / 1000}k` : value }, splitLine: { lineStyle: { color: "#eeedeb" } } },
     series: chartSeries,
@@ -99,7 +107,7 @@ function render() {
       version.textContent += ` · ${point.engine_variant}`;
     }
     row.append(version);
-    for (const value of [point.concurrency, point.throughput, point.duration, point.ttft_ms, point.tpot_ms]) {
+    for (const value of [point.concurrency, point.throughput, point.duration, point.ttft_ms, point.tpot_ms, point.accept_length]) {
       const cell = document.createElement("td"); cell.textContent = value == null ? "—" : format.format(value); row.append(cell);
     }
     const statusCell = document.createElement("td");
@@ -134,6 +142,12 @@ function acceptReport(payload) {
     if (!["P", "D"].includes(point.phase) || typeof point.engine_sha !== "string" || typeof point.run_id !== "string") {
       throw new Error("结果点缺少必要的版本或阶段字段");
     }
+    if (point.protocol_id !== "sglang-cookbook-v2") {
+      throw new Error("旧测试口径已作废，仅接受 sglang-cookbook-v2 结果");
+    }
+  }
+  if (payload.series.some(series => series.protocol_id !== "sglang-cookbook-v2" || !Number.isFinite(series.metric_value))) {
+    throw new Error("结果序列缺少 Cookbook 协议或主指标");
   }
   report = payload;
   if (!report.points.some(point => point.profile === "capacity")) controls.profile.value = "smoke";
@@ -167,7 +181,7 @@ document.querySelector("#refresh").addEventListener("click", loadReport);
 document.querySelector("#method-button").addEventListener("click", () => document.querySelector("#method-dialog").showModal());
 document.querySelector("#download").addEventListener("click", () => download(JSON.stringify(report, null, 2), "summary.json", "application/json"));
 document.querySelector("#download-csv").addEventListener("click", () => {
-  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "measurement_basis", "input_length", "concurrency", "repetition", "status", "stable", "throughput", "duration", "ttft_ms", "tpot_ms"];
+  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "protocol_id", "strategy", "speculative_algorithm", "dataset_sha256", "measurement_basis", "input_length", "concurrency", "repetition", "status", "stable", "metric_name", "metric_value", "throughput", "duration", "ttft_ms", "tpot_ms", "p99_tpot_ms", "accept_length"];
   const csv = [columns, ...visiblePoints.map(point => columns.map(key => point[key] ?? ""))]
     .map(row => row.map(value => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`).join(",")).join("\r\n");
   download("\uFEFF" + csv, "points.csv", "text/csv;charset=utf-8");

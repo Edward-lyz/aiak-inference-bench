@@ -129,6 +129,46 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(report["points"][0]["engine_variant"], "metrics-guard-hotfix")
         self.assertEqual(report["series"][0]["engine_variant"], "metrics-guard-hotfix")
 
+    def test_cookbook_decode_uses_latency_and_requires_acceptance(self) -> None:
+        self.point.update(
+            protocol_id="sglang-cookbook-v2", phase="D", output_length=512,
+            strategy="low-latency", speculative_algorithm="DSPARK", speculative_block_size=5,
+            measurement_mode="real-prefill-decode-latency", dataset_sha256="b" * 64,
+        )
+        self.point["steady"]["output_throughput"] = 100
+        self.point["metrics"].update(output_throughput=95, mean_tpot_ms=2, accept_length=3.5)
+        report = self.write_repetitions([100] * 3)
+        series = report["series"][0]
+        self.assertTrue(series["stable"])
+        self.assertTrue(series["lower_is_better"])
+        self.assertEqual(series["metric_name"], "tpot_ms")
+        self.assertEqual(series["metric_value"], 2)
+        self.assertEqual(series["throughput"], 100)
+        self.assertEqual(series["accept_length"], 3.5)
+        self.point["metrics"]["accept_length"] = None
+        self.assertEqual(self.write_repetitions([100] * 3)["series"], [])
+
+    def test_decode_qualification_uses_tpot_variation_not_e2e_throughput(self) -> None:
+        self.point.update(protocol_id="sglang-cookbook-v2", phase="D", output_length=512)
+        self.point["steady"]["output_throughput"] = 100
+        self.point["metrics"].update(output_throughput=100, mean_tpot_ms=2, accept_length=3)
+        self.write_repetitions([100] * 3)
+        path = self.root / "test-run" / "community-3" / "point.json"
+        changed = json.loads(path.read_text())
+        changed["metrics"]["mean_tpot_ms"] = 10
+        path.write_text(json.dumps(changed))
+        report = summarize.build_summary(self.root, self.root / "summary.json")
+        self.assertFalse(report["series"][0]["stable"])
+
+    def test_cookbook_protocol_and_dataset_cannot_merge_with_old_measurements(self) -> None:
+        original = self.write_repetitions([100])
+        self.point.update(protocol_id="sglang-cookbook-v2", dataset_sha256="b" * 64)
+        cookbook = self.write_repetitions([100])
+        self.assertNotEqual(original["points"][0]["comparison_key"], cookbook["points"][0]["comparison_key"])
+        self.point["dataset_sha256"] = "c" * 64
+        changed = self.write_repetitions([100])
+        self.assertNotEqual(cookbook["points"][0]["comparison_key"], changed["points"][0]["comparison_key"])
+
 
 if __name__ == "__main__":
     unittest.main()

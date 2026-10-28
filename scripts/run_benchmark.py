@@ -9,14 +9,16 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from urllib.error import URLError
-from urllib.request import ProxyHandler, build_opener
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urljoin
+from urllib.request import Request, ProxyHandler, build_opener, parse_http_list, parse_keqv_list
 
 from summarize import build_summary
 
@@ -28,6 +30,7 @@ def validate_config(config: dict) -> None:
         "phase_args", "input_length", "decode_output_length", "concurrencies",
         "num_prompts", "repetitions", "min_measurement_seconds", "max_cv",
         "startup_timeout_seconds", "point_timeout_seconds",
+        "protocol_id", "recipe_source", "dataset_path",
     )
     missing = [key for key in required if key not in config]
     if missing:
@@ -44,6 +47,9 @@ def validate_config(config: dict) -> None:
         raise ValueError("concurrencies must contain positive integers")
     if config["concurrencies"] != sorted(set(config["concurrencies"])):
         raise ValueError("concurrencies must be unique and increasing")
+    for values in config.get("phase_concurrencies", {}).values():
+        if not values or any(type(c) is not int or c <= 0 for c in values) or values != sorted(set(values)):
+            raise ValueError("phase_concurrencies must contain unique increasing positive integers")
     if not config["gpu_ids"] or len(set(config["gpu_ids"])) != len(config["gpu_ids"]):
         raise ValueError("gpu_ids must be nonempty and unique")
     if any(type(gpu) is not int or gpu < 0 for gpu in config["gpu_ids"]):
@@ -56,20 +62,33 @@ def validate_config(config: dict) -> None:
         raise ValueError("model_path must contain config.json")
     if len({engine["id"] for engine in config["engines"]}) != len(config["engines"]):
         raise ValueError("Engine IDs must be unique")
+    if config["protocol_id"] != "sglang-cookbook-v2":
+        raise ValueError("Retired protocol: use sglang-cookbook-v2")
+    if not Path(config["dataset_path"]).is_file():
+        raise ValueError("A pinned local ShareGPT dataset is required")
     for engine in config["engines"]:
         if engine["id"] not in ("community", "aiak"):
             raise ValueError("Engine ID must be community or aiak")
         if not isinstance(engine["image"], str) or not engine["image"]:
             raise ValueError("Each engine needs an image")
         if any("speculative" in arg or "ep-dispatch-algorithm" in arg for arg in engine.get("extra_args", [])):
-            raise ValueError("Engine overrides cannot enable MTP or fake expert routing")
+            raise ValueError("Engine overrides cannot change the shared speculation/routing recipe")
     for args in [config["server_args"], *config["phase_args"].values()]:
         if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
             raise ValueError("Server arguments must be arrays of strings")
     if "--disable-radix-cache" not in config["server_args"]:
         raise ValueError("This capacity profile requires --disable-radix-cache")
-    if any("speculative" in arg or "ep-dispatch-algorithm" in arg for arg in config["server_args"]):
-        raise ValueError("This profile supports MTP off and real expert routing only")
+    for phase in ("P", "D"):
+        args = config["server_args"] + config["phase_args"][phase]
+        if any("disaggregation" in arg or "ep-dispatch-algorithm" in arg for arg in args):
+            raise ValueError("Cookbook baseline requires real Prefill and native expert routing")
+        if phase == "P" and any("speculative" in arg for arg in args):
+            raise ValueError("Official high-throughput baseline disables speculation")
+        if phase == "D":
+            if "--speculative-algorithm" not in args or args[args.index("--speculative-algorithm") + 1] != "DSPARK":
+                raise ValueError("Official low-latency baseline requires DSPARK")
+            if "--speculative-dspark-block-size" not in args or args[args.index("--speculative-dspark-block-size") + 1] != "5":
+                raise ValueError("Official low-latency baseline uses DSpark block size 5")
 
 
 def save_json(path: Path, payload: dict) -> None:
@@ -87,9 +106,11 @@ def image_identity(image: str) -> dict:
     return {"reference": image, "id": details["Id"], "repo_digests": details["RepoDigests"], "source_sha": source}
 
 
-def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool = False) -> bool:
+def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool = False,
+                        gpu_ids: list[int] | None = None) -> bool:
+    selection = ["--id=" + ",".join(map(str, gpu_ids))] if gpu_ids else []
     active_pids = set(subprocess.check_output([
-        "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits",
+        "nvidia-smi", *selection, "--query-compute-apps=pid", "--format=csv,noheader,nounits",
     ], text=True).split())
     owned_pids = set()
     if server_name:
@@ -109,7 +130,7 @@ def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool 
             except ProcessLookupError:
                 continue
         refreshed = set(subprocess.check_output([
-            "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits",
+            "nvidia-smi", *selection, "--query-compute-apps=pid", "--format=csv,noheader,nounits",
         ], text=True).split())
         targets = {pid: fd for pid, fd in pidfds.items() if pid in refreshed}
         print(json.dumps({"event": "terminate_foreign_gpu", "pids": sorted(targets),
@@ -137,17 +158,22 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "schema_version": 1, "run_id": run_dir.name, "timestamp": datetime.now(timezone.utc).isoformat(),
         "engine": engine["id"], "engine_sha": manifest["engines"][engine["id"]]["source_sha"],
         "engine_variant": engine.get("variant", "unmodified"),
+        "protocol_id": config["protocol_id"], "recipe_source": config["recipe_source"],
+        "strategy": "high-throughput" if phase == "P" else "low-latency",
+        "speculative_algorithm": None if phase == "P" else "DSPARK",
+        "speculative_block_size": None if phase == "P" else 5,
+        "dataset_sha256": manifest["dataset_sha256"],
         "image_id": manifest["engines"][engine["id"]]["id"], "client_image_id": client_image,
         "model": config["model_name"], "model_revision": config["model_revision"],
         "model_config_sha256": manifest["model_config_sha256"], "precision": config["precision"],
-        "phase": phase, "measurement_mode": "client" if phase == "P" else "client-synthetic-kv",
-        "fake_kv": phase == "D", "fake_ep": False, "mtp": False,
+        "phase": phase, "measurement_mode": "client" if phase == "P" else "real-prefill-decode-latency",
+        "fake_kv": False, "fake_ep": False, "mtp": phase == "D",
         "cache_mode": "off", "profile": profile, "input_length": config["input_length"],
         "output_length": 1 if phase == "P" else config["decode_output_length"],
         "concurrency": concurrency, "repetition": repetition, "num_prompts": prompts,
         "gpu_count": len(config["gpu_ids"]), "hardware": manifest["hardware"],
         "seed": 42, "status": "running", "error": None,
-        "dataset": "random-ids", "tokenized_prompt": True, "random_range_ratio": 1.0,
+        "dataset": "sharegpt-repeat-truncate", "tokenized_prompt": True, "random_range_ratio": 1.0,
         "measurement_basis": "native-full-run",
         "min_measurement_seconds": config["min_measurement_seconds"], "max_cv": config["max_cv"],
         "server_args": config["server_args"] + config["phase_args"][phase],
@@ -161,12 +187,14 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "-e", "HF_HUB_OFFLINE=1", "-e", "TRANSFORMERS_OFFLINE=1",
         *(["--security-opt", config["docker_security_opt"]] if config.get("docker_security_opt") else []),
         "-v", f"{config['model_path']}:/model:ro", "-v", f"{point_dir}:/results",
+        "-v", f"{config['dataset_path']}:/dataset.json:ro",
         "--entrypoint", "python3", client_image,
         "-m", "sglang.benchmark.steady_state_serving",
         "--steady-state-concurrency-ratio", "0.8",
         "--steady-state-output-file", "/results/steady.jsonl",
         "--backend", "sglang", "--base-url", f"http://127.0.0.1:{config['port']}",
-        "--model", "/model", "--tokenizer", "/model", "--dataset-name", "random-ids",
+        "--model", "/model", "--tokenizer", "/model", "--dataset-name", "random",
+        "--dataset-path", "/dataset.json",
         "--tokenize-prompt",
         "--random-input-len", str(config["input_length"]),
         "--random-output-len", str(point["output_length"]), "--random-range-ratio", "1",
@@ -174,14 +202,12 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "--request-rate", "inf", "--seed", "42", "--warmup-requests", str(min(concurrency, 4)),
         "--output-file", "/results/raw.jsonl",
     ]
-    if phase == "D":
-        command.append("--fake-prefill")
     save_json(point_dir / "command.json", {"argv": command})
     print(f"Running {point_dir.name}", flush=True)
     process = None
     attempts = []
     try:
-        check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"])
+        check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"], config["gpu_ids"])
         deadline = time.monotonic() + config["point_timeout_seconds"]
         for attempt in range(1, 2 if profile == "smoke" else 4):
             point["num_prompts"] = prompts
@@ -193,12 +219,12 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
                 log.flush()
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
                 while process.poll() is None:
-                    if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"]):
+                    if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"], config["gpu_ids"]):
                         raise RuntimeError("External GPU interference removed; overlapping measurement is invalid")
                     if time.monotonic() > deadline:
                         raise RuntimeError("Native client exceeded point timeout")
                     time.sleep(5)
-            if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"]):
+            if check_gpu_ownership(server_name, config["terminate_foreign_gpu_processes"], config["gpu_ids"]):
                 raise RuntimeError("External GPU interference removed; overlapping measurement is invalid")
             if process.returncode != 0:
                 raise RuntimeError(f"Native client exited {process.returncode}; inspect client.log")
@@ -216,6 +242,9 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
                 "input_throughput", "output_throughput", "mean_ttft_ms", "mean_tpot_ms",
                 "mean_e2e_latency_ms",
             )}
+            measured.update({key: raw.get(key) for key in ("accept_length", "median_tpot_ms", "p99_tpot_ms")})
+            if phase == "D" and (not measured["accept_length"] or measured["accept_length"] <= 0):
+                raise ValueError("DSpark acceptance was not reported by the native client")
             steady = {key: steady[key] for key in (
                 "input_throughput", "output_throughput", "duration", "average_concurrency",
             )}
@@ -284,14 +313,14 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
     print(f"Starting {name}", flush=True)
     success = True
     try:
-        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"])
+        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"], gpu_ids=config["gpu_ids"])
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
         deadline = time.monotonic() + config["startup_timeout_seconds"]
         while time.monotonic() < deadline:
             state = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True).strip()
             if state != "true":
                 raise RuntimeError(f"Server exited during startup: {name}")
-            check_gpu_ownership(name, config["terminate_foreign_gpu_processes"])
+            check_gpu_ownership(name, config["terminate_foreign_gpu_processes"], config["gpu_ids"])
             try:
                 with opener.open(f"http://127.0.0.1:{config['port']}/health", timeout=3) as response:
                     if response.status == 200:
@@ -302,8 +331,17 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         else:
             raise RuntimeError(f"Server readiness exceeded {config['startup_timeout_seconds']}s")
         with opener.open(f"http://127.0.0.1:{config['port']}/server_info", timeout=10) as response:
-            save_json(run_dir / f"{engine['id']}-{phase}-server-info.json", json.load(response))
-        for concurrency in config["concurrencies"]:
+            server_info = json.load(response)
+        save_json(run_dir / f"{engine['id']}-{phase}-server-info.json", server_info)
+        resolved = server_info.get("server_args", server_info)
+        expected_speculation = "DSPARK" if phase == "D" else None
+        if resolved.get("speculative_algorithm") != expected_speculation:
+            raise RuntimeError("Resolved speculative algorithm differs from the cookbook recipe")
+        if resolved.get("tp_size") != len(config["gpu_ids"]) or resolved.get("ep_size") != len(config["gpu_ids"]):
+            raise RuntimeError("Resolved TP/EP topology differs from the cookbook GPU allocation")
+        if phase == "D" and resolved.get("speculative_dspark_block_size") != 5:
+            raise RuntimeError("Resolved DSpark block size differs from the cookbook recipe")
+        for concurrency in config.get("phase_concurrencies", {}).get(phase, config["concurrencies"]):
             point_config = dict(config)
             for repetition in range(1, config["repetitions"] + 1):
                 point = run_point(point_config, engine, phase, concurrency, repetition, run_dir,
@@ -329,6 +367,7 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
 
 
 def main() -> None:
+    orchestrator_source = Path(__file__).read_bytes()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--profile", choices=("smoke", "capacity"), default="smoke")
@@ -350,29 +389,114 @@ def main() -> None:
         print(json.dumps({"profile": args.profile, "engines": [e["id"] for e in engines],
                           "phase": args.phase, "config_valid": True}))
         return
+    if config.get("community_image_repository"):
+        repository = config["community_image_repository"]
+        registry, image_path = repository.split("/", 1)
+        registry_url = f"https://{registry}"
+        tags_url = f"{registry_url}/v2/{image_path}/tags/list?n=10000"
+        registry_opener = build_opener(ProxyHandler({}))
+        headers = {}
+        try:
+            with registry_opener.open(tags_url, timeout=30) as response:
+                tag_page = json.load(response)
+                next_link = response.headers.get("Link")
+        except HTTPError as exc:
+            challenge = exc.headers.get("WWW-Authenticate", "")
+            if exc.code != 401 or not challenge.startswith("Bearer "):
+                raise
+            auth = parse_keqv_list(parse_http_list(challenge[len("Bearer "):]))
+            token_url = auth["realm"] + "?" + urlencode({
+                "service": auth["service"], "scope": f"repository:{image_path}:pull",
+            })
+            with registry_opener.open(token_url, timeout=30) as response:
+                token = json.load(response)
+            headers["Authorization"] = "Bearer " + token["token"]
+            with registry_opener.open(Request(tags_url, headers=headers), timeout=30) as response:
+                tag_page = json.load(response)
+                next_link = response.headers.get("Link")
+        tags = list(tag_page["tags"])
+        while next_link:
+            next_url = urljoin(registry_url, next_link.split(";")[0].strip("<>"))
+            with registry_opener.open(Request(next_url, headers=headers), timeout=30) as response:
+                tags.extend(json.load(response)["tags"])
+                next_link = response.headers.get("Link")
+        dated_tags = [
+            (match.group(1), tag) for tag in tags
+            if (match := re.fullmatch(r"nightly-dev-cu13-(\d{8})-[0-9a-f]{8}", tag))
+        ]
+        if not dated_tags:
+            raise ValueError("No CUDA13 amd64 community-nightly tag found")
+        newest_date = max(date for date, tag in dated_tags)
+        headers["Accept"] = ", ".join((
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.oci.image.index.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.docker.distribution.manifest.list.v2+json",
+        ))
+        candidates = []
+        for date, tag in dated_tags:
+            if date != newest_date:
+                continue
+            manifest_url = f"{registry_url}/v2/{image_path}/manifests/{tag}"
+            with registry_opener.open(Request(manifest_url, headers=headers), timeout=30) as response:
+                manifest_bytes = response.read()
+            digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+            image_manifest = json.loads(manifest_bytes)
+            if "manifests" in image_manifest:
+                child = next(item for item in image_manifest["manifests"]
+                             if item["platform"].get("os") == "linux" and item["platform"].get("architecture") == "amd64")
+                child_url = f"{registry_url}/v2/{image_path}/manifests/{child['digest']}"
+                with registry_opener.open(Request(child_url, headers=headers), timeout=30) as response:
+                    image_manifest = json.load(response)
+            config_url = f"{registry_url}/v2/{image_path}/blobs/{image_manifest['config']['digest']}"
+            # curl strips registry Authorization on cross-host blob redirects.
+            curl_config = f'header = {json.dumps("Authorization: " + headers["Authorization"])}\n' if headers.get("Authorization") else ""
+            image_config = json.loads(subprocess.check_output(
+                ["curl", "--fail", "--silent", "--show-error", "--location", "--max-time", "30",
+                 "--config", "-", config_url], input=curl_config, text=True,
+            ))
+            if image_config["architecture"] != "amd64" or image_config["os"] != "linux":
+                raise ValueError(f"Latest tag {tag} is not linux/amd64")
+            candidates.append((image_config["created"], tag, digest))
+        created, tag, digest = max(candidates)
+        pinned_image = f"{repository}@{digest}"
+        config["community_image_selection"] = {"tag": tag, "digest": digest, "created": created}
+        print(json.dumps({"event": "resolved_community_image", **config["community_image_selection"]}), flush=True)
+        subprocess.run(["docker", "pull", "--platform", "linux/amd64", pinned_image], check=True)
+        config["client_image"] = pinned_image
+        for engine in config["engines"]:
+            if engine["id"] == "community":
+                engine["image"] = pinned_image
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     # All configs share a host-level lock, including different checkouts and runners.
     lock_fd = os.open("/tmp/aiak-inference-bench.gpu.lock", os.O_RDONLY | os.O_CREAT, 0o644)
     with os.fdopen(lock_fd, "r", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"])
+        check_gpu_ownership(terminate_foreign=config["terminate_foreign_gpu_processes"], gpu_ids=config["gpu_ids"])
         with socket.socket() as port_probe:
             port_probe.bind(("127.0.0.1", config["port"]))
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
         run_dir = output_dir / run_id
         run_dir.mkdir()
+        (run_dir / "orchestrator.py").write_bytes(orchestrator_source)
         hardware = subprocess.check_output([
-            "nvidia-smi", "--query-gpu=index,name,memory.total,driver_version", "--format=csv,noheader",
+            "nvidia-smi", "--id=" + ",".join(map(str, config["gpu_ids"])),
+            "--query-gpu=index,name,memory.total,driver_version", "--format=csv,noheader",
         ], text=True).strip()
+        dataset_hash = hashlib.sha256()
+        with Path(config["dataset_path"]).open("rb") as dataset:
+            while chunk := dataset.read(1024 * 1024):
+                dataset_hash.update(chunk)
         manifest = {
             "run_id": run_id, "profile": args.profile, "hardware": hardware,
             "model_config_sha256": hashlib.sha256(Path(config["model_path"], "config.json").read_bytes()).hexdigest(),
+            "dataset_sha256": dataset_hash.hexdigest(),
             "client": image_identity(config["client_image"]),
             "engines": {engine["id"]: image_identity(engine["image"]) for engine in engines},
             "config": config,
             "docker_version": subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True).strip(),
-            "orchestrator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "orchestrator_sha256": hashlib.sha256(orchestrator_source).hexdigest(),
             "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         }
         save_json(run_dir / "manifest.json", manifest)
@@ -381,11 +505,24 @@ def main() -> None:
         signal.signal(signal.SIGTERM, stop_on_signal)
         all_ok = True
         phases = ["P", "D"] if args.phase == "all" else [args.phase]
+        image_holders = []
         try:
+            image_ids = {manifest["client"]["id"], *(image["id"] for image in manifest["engines"].values())}
+            for index, image_id in enumerate(sorted(image_ids)):
+                holder = f"aiak-bench-image-{run_id}-{index}"
+                image_holders.append(holder)
+                subprocess.run([
+                    "docker", "run", "-d", "--name", holder, "--network", "none",
+                    "-e", "NVIDIA_VISIBLE_DEVICES=void", "-e", "CUDA_VISIBLE_DEVICES=",
+                    "--label", f"aiak-bench.run={run_id}", "--entrypoint", "sleep", image_id, "infinity",
+                ], check=True, stdout=subprocess.DEVNULL)
             for engine in engines:
                 for phase in phases:
                     all_ok = run_server(config, engine, phase, run_dir, args.profile, manifest) and all_ok
         finally:
+            for holder in image_holders:
+                subprocess.run(["docker", "rm", "-f", holder], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=False)
             summary = build_summary(output_dir, output_dir / "summary.json")
             if config.get("publish_summary_path"):
                 save_json(Path(config["publish_summary_path"]), summary)

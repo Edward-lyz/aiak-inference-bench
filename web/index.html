@@ -14,7 +14,7 @@
   </aside>
   <main>
     <header><span>测试结果</span><button id="refresh" aria-label="刷新结果">↻ 刷新</button></header>
-    <section class="intro"><h1>SGLang 吞吐对比</h1><div class="actions"><label class="button" for="import-file">导入 JSON</label><input id="import-file" type="file" accept=".json" hidden /><button class="button" id="download">导出 JSON ↗</button></div></section>
+    <section class="intro"><h1>SGLang 性能对比</h1><div class="actions"><label class="button" for="import-file">导入 JSON</label><input id="import-file" type="file" accept=".json" hidden /><button class="button" id="download">导出 JSON ↗</button></div></section>
     <section class="filters" aria-label="测试条件">
       <div class="phase-switch"><button data-phase="P" class="selected">Prefill</button><button data-phase="D">Decode</button></div>
       <label>模型<select id="model"><option>—</option></select></label>
@@ -23,9 +23,9 @@
       <label>比较条件<select id="comparison"><option>—</option></select></label>
       <label>运行<select id="run"><option>—</option></select></label>
     </section>
-    <dl class="conditions"><div><dt>输入分布</dt><dd id="dataset-mode">—</dd></div><div><dt>计时口径</dt><dd id="measurement-mode">—</dd></div><div><dt>KV</dt><dd id="kv-mode">真实</dd></div><div><dt>专家路由</dt><dd>真实</dd></div><div><dt>MTP</dt><dd>关闭</dd></div><div><dt>Prefix cache</dt><dd>关闭</dd></div><div><dt>延迟门槛</dt><dd>无</dd></div></dl>
+    <dl class="conditions"><div><dt>部署策略</dt><dd id="strategy-mode">—</dd></div><div><dt>输入分布</dt><dd id="dataset-mode">—</dd></div><div><dt>计时口径</dt><dd id="measurement-mode">—</dd></div><div><dt>KV</dt><dd id="kv-mode">—</dd></div><div><dt>专家路由</dt><dd>真实</dd></div><div><dt>推测解码</dt><dd id="speculation-mode">—</dd></div><div><dt>Prefix cache</dt><dd id="cache-mode">—</dd></div><div><dt>延迟门槛</dt><dd>无</dd></div></dl>
     <section class="metrics" id="metrics">
-      <article><h2>Community · 合格峰值</h2><div class="metric-value" id="community-value">—</div></article>
+      <article><h2 id="community-title">Community · 合格峰值</h2><div class="metric-value" id="community-value">—</div></article>
       <article><h2 id="aiak-title">AIAK · 合格峰值</h2><div class="metric-value" id="aiak-value">—</div></article>
       <article><h2 id="ratio-title">AIAK / Community</h2><div class="metric-value" id="ratio-value">—</div></article>
     </section>
@@ -36,13 +36,13 @@
     </section>
     <section class="table-panel">
       <div class="panel-heading"><h2>测试明细 <span id="point-count">0</span></h2><button id="download-csv">导出 CSV ↗</button></div>
-      <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th>吞吐 (tok/s)</th><th>测量 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th id="throughput-heading">输入吞吐 (tok/s)</th><th>测量 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>原生平均接受长度</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
       <div class="table-empty" id="table-empty">暂无记录</div>
     </section>
     <section id="failure-panel" hidden><h2>启动失败</h2><table><thead><tr><th>运行</th><th>引擎</th><th>阶段</th></tr></thead><tbody id="failure-rows"></tbody></table></section>
     <div id="error" role="alert" hidden></div>
   </main>
-  <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><h2>测量口径</h2><table><tbody><tr><th>Prefill</th><td>固定输入，输出 1 token；输入 tokens/s</td></tr><tr><th>Decode</th><td>合成 KV，真实专家路由；输出 tokens/s</td></tr><tr><th>完整计时</th><td>原生客户端预热后的完整测量区间</td></tr><tr><th>合格容量</th><td>≥3 次独立重复；每次完整计时 ≥120 s；平均并发 ≥目标 80%；跨重复 CV ≤5%；请求全部成功</td></tr><tr><th>吞吐比</th><td>同一运行、同一比较条件下，两套引擎各自的已测合格峰值之比</td></tr><tr><th>原始证据</th><td>保存在内网运行目录</td></tr></tbody></table></dialog>
+  <dialog id="method-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><h2>测量口径</h2><table><tbody><tr><th>Prefill</th><td>官方高吞吐配置，输出 1 token；输入 tokens/s</td></tr><tr><th>Decode</th><td>官方低延迟配置、DSpark、真实 Prefill；TPOT 越低越好</td></tr><tr><th>D 辅助吞吐</th><td>包含 Prefill 的端到端输出 tokens/s</td></tr><tr><th>输入</th><td>原生客户端将 ShareGPT 提示重复或截断至固定长度</td></tr><tr><th>完整计时</th><td>原生客户端预热后的完整测量区间</td></tr><tr><th>合格结果</th><td>≥3 次独立重复；每次 ≥120 s；平均并发 ≥目标 80%；主指标跨重复 CV ≤5%；请求全部成功</td></tr><tr><th>相对速度</th><td>P 比较输入吞吐；D 比较 TPOT 的倒数；限同一运行、同一条件</td></tr><tr><th>旧口径数据</th><td>已作废归档，不参与本轮比较</td></tr><tr><th>原始证据</th><td>保存在内网运行目录</td></tr></tbody></table></dialog>
   <script type="module" src="./app.js"></script>
 </body>
 </html>
