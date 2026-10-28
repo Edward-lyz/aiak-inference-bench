@@ -37,6 +37,7 @@ def build_summary(source: Path, destination: Path) -> dict:
             "output_length", "concurrency", "repetition", "gpu_count", "status",
         )}
         public["dataset"] = point.get("dataset")
+        public["num_prompts"] = point.get("num_prompts")
         public["engine_variant"] = point.get("engine_variant", "unmodified")
         public["measurement_basis"] = point.get("measurement_basis", "native-steady-interval")
         public.update({key: point.get(key) for key in (
@@ -72,12 +73,12 @@ def build_summary(source: Path, destination: Path) -> dict:
             if latency_metric and (not public["accept_length"] or not math.isfinite(public["accept_length"]) or public["accept_length"] <= 0):
                 public.update(status="invalid", error="No native DSpark acceptance measurement")
         if public["status"] == "ok":
-            groups[(comparison_key, point["engine"], point["run_id"], point["concurrency"])].append((public, point))
+            groups[(comparison_key, point["engine"], point["run_id"], point["concurrency"], point.get("num_prompts"))].append((public, point))
         else:
             failed_groups.add((comparison_key, point["engine"], point["run_id"], point["concurrency"]))
         points.append(public)
     series = []
-    for (comparison_key, engine, run_id, concurrency), samples in groups.items():
+    for (comparison_key, engine, run_id, concurrency, num_prompts), samples in groups.items():
         rates = [sample[0]["throughput"] for sample in samples]
         values = [sample[0]["metric_value"] for sample in samples]
         cv = statistics.pstdev(values) / statistics.mean(values) if len(values) > 1 else None
@@ -102,6 +103,7 @@ def build_summary(source: Path, destination: Path) -> dict:
                 "metric_name", "metric_unit", "lower_is_better", "fake_kv", "fake_ep", "cache_mode",
             )},
             "comparison_key": comparison_key, "engine": engine, "run_id": run_id, "concurrency": concurrency,
+            "num_prompts": num_prompts,
             "throughput": statistics.median(rates), "min": min(rates), "max": max(rates),
             "metric_value": statistics.median(values),
             "accept_length": None if representative["accept_length"] is None else statistics.median(s[0]["accept_length"] for s in samples),

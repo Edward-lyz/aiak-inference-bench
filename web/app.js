@@ -107,7 +107,7 @@ function render() {
       version.textContent += ` · ${point.engine_variant}`;
     }
     row.append(version);
-    for (const value of [point.concurrency, point.throughput, point.duration, point.ttft_ms, point.tpot_ms, point.accept_length]) {
+    for (const value of [point.concurrency, point.num_prompts, point.throughput, point.duration, point.ttft_ms, point.tpot_ms, point.accept_length]) {
       const cell = document.createElement("td"); cell.textContent = value == null ? "—" : format.format(value); row.append(cell);
     }
     const statusCell = document.createElement("td");
@@ -181,7 +181,7 @@ document.querySelector("#refresh").addEventListener("click", loadReport);
 document.querySelector("#method-button").addEventListener("click", () => document.querySelector("#method-dialog").showModal());
 document.querySelector("#download").addEventListener("click", () => download(JSON.stringify(report, null, 2), "summary.json", "application/json"));
 document.querySelector("#download-csv").addEventListener("click", () => {
-  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "protocol_id", "strategy", "speculative_algorithm", "dataset_sha256", "measurement_basis", "input_length", "concurrency", "repetition", "status", "stable", "metric_name", "metric_value", "throughput", "duration", "ttft_ms", "tpot_ms", "p99_tpot_ms", "accept_length"];
+  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "protocol_id", "strategy", "speculative_algorithm", "dataset_sha256", "measurement_basis", "input_length", "concurrency", "num_prompts", "repetition", "status", "stable", "metric_name", "metric_value", "throughput", "duration", "ttft_ms", "tpot_ms", "p99_tpot_ms", "accept_length"];
   const csv = [columns, ...visiblePoints.map(point => columns.map(key => point[key] ?? ""))]
     .map(row => row.map(value => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`).join(",")).join("\r\n");
   download("\uFEFF" + csv, "points.csv", "text/csv;charset=utf-8");

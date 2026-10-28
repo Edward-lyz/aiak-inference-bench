@@ -169,6 +169,17 @@ class SummaryTests(unittest.TestCase):
         changed = self.write_repetitions([100])
         self.assertNotEqual(cookbook["points"][0]["comparison_key"], changed["points"][0]["comparison_key"])
 
+    def test_different_prompt_subsets_cannot_combine_for_qualification(self) -> None:
+        self.point["num_prompts"] = 32
+        self.write_repetitions([100] * 3)
+        path = self.root / "test-run" / "community-3" / "point.json"
+        changed = json.loads(path.read_text())
+        changed["num_prompts"] = 64
+        path.write_text(json.dumps(changed))
+        report = summarize.build_summary(self.root, self.root / "summary.json")
+        self.assertEqual({series["num_prompts"] for series in report["series"]}, {32, 64})
+        self.assertFalse(any(series["stable"] for series in report["series"]))
+
 
 if __name__ == "__main__":
     unittest.main()

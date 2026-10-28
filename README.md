@@ -44,7 +44,7 @@ The native longest continuous interval remains diagnostic. Fixed-length closed-l
 
 The native client uses `random`, a pinned local ShareGPT dataset, `--tokenize-prompt` and `--random-range-ratio 1`. Native sampling repeats or truncates real prompt token sequences to fixed input lengths. This is a controlled synthetic workload; it does not establish production agent-trace acceptance. Dataset contents never enter Git. EOS is ignored by the pinned client's default behavior.
 
-Capacity measurements increase the native request count when a full timed measurement is shorter than the qualification threshold, targeting 150 seconds for a 120-second minimum, with at most three attempts per repetition. All native attempts are retained, and subsequent repetitions reuse the chosen request count. Short full measurements still remain unqualified. The sweep covers only `concurrencies` in the config. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, dataset recipe, workload, client image and shared launch arguments are part of the comparison key.
+The first engine calibrates request count once per phase/concurrency, targeting 150 seconds for a 120-second minimum, with at most three native attempts. All later repetitions and the other engine reuse that count and seed, so paired measurements use identical prompt subsets. A fixed-count window below 120 seconds remains unqualified; rerun both engines with a larger common count when needed. Different request counts never combine for qualification. The sweep uses `phase_concurrencies` when supplied, otherwise `concurrencies`. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, dataset recipe, workload, client image and shared launch arguments are part of the comparison key.
 
 Initial capacity request count is at least four times concurrency. This limits expensive long-input Prefill runs while preserving the measured ≥80% average-concurrency gate; adaptive timing can increase the count further.
 
@@ -69,7 +69,7 @@ The frontend bundles pinned ECharts locally and does not depend on a CDN, databa
 
 Only trusted `main` may run GPU jobs. All GPU workflows are manual and serialized. No pull-request code runs on the internal runner.
 
-Repository variables (private paths are configured out-of-band):
+Repository Actions secrets (private paths are configured out-of-band):
 
 | Variable | Value |
 |---|---|

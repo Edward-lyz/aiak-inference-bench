@@ -50,6 +50,8 @@ def validate_config(config: dict) -> None:
     for values in config.get("phase_concurrencies", {}).values():
         if not values or any(type(c) is not int or c <= 0 for c in values) or values != sorted(set(values)):
             raise ValueError("phase_concurrencies must contain unique increasing positive integers")
+    if any(type(count) is not int or count <= 0 for count in config.get("paired_prompt_counts", {}).values()):
+        raise ValueError("paired_prompt_counts must contain positive integers")
     if not config["gpu_ids"] or len(set(config["gpu_ids"])) != len(config["gpu_ids"]):
         raise ValueError("gpu_ids must be nonempty and unique")
     if any(type(gpu) is not int or gpu < 0 for gpu in config["gpu_ids"]):
@@ -153,7 +155,10 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
     point_dir = run_dir / f"{engine['id']}-{phase}-c{concurrency}-r{repetition}"
     point_dir.mkdir()
     client_name = f"aiak-bench-client-{run_dir.name}-{engine['id']}-{phase.lower()}-{concurrency}-{repetition}"
-    prompts = config["num_prompts"] if profile == "smoke" else max(config["num_prompts"], 4 * concurrency)
+    fixed_prompts = config.get("paired_prompt_counts", {}).get(f"{phase}:{concurrency}") if profile == "capacity" else None
+    prompts = fixed_prompts if fixed_prompts is not None else (
+        config["num_prompts"] if profile == "smoke" else max(config["num_prompts"], 4 * concurrency)
+    )
     point = {
         "schema_version": 1, "run_id": run_dir.name, "timestamp": datetime.now(timezone.utc).isoformat(),
         "engine": engine["id"], "engine_sha": manifest["engines"][engine["id"]]["source_sha"],
@@ -262,7 +267,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
             attempts[-1]["steady"] = steady
             attempts[-1]["measurement"] = measurement
             save_json(point_dir / "command.json", {"argv": command, "attempts": attempts})
-            if profile == "smoke" or measurement["duration"] >= config["min_measurement_seconds"]:
+            if profile == "smoke" or fixed_prompts is not None or measurement["duration"] >= config["min_measurement_seconds"]:
                 break
             next_prompts = min(16384, math.ceil(
                 prompts * config["min_measurement_seconds"] * 1.25 / measurement["duration"] / concurrency
@@ -341,6 +346,7 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
             raise RuntimeError("Resolved TP/EP topology differs from the cookbook GPU allocation")
         if phase == "D" and resolved.get("speculative_dspark_block_size") != 5:
             raise RuntimeError("Resolved DSpark block size differs from the cookbook recipe")
+        config.setdefault("paired_prompt_counts", {})
         for concurrency in config.get("phase_concurrencies", {}).get(phase, config["concurrencies"]):
             point_config = dict(config)
             for repetition in range(1, config["repetitions"] + 1):
@@ -351,6 +357,9 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
                     save_json(Path(config["publish_summary_path"]), summary)
                 if point["status"] != "ok":
                     return False  # Do not continue pushing a failing or unhealthy engine.
+                if profile == "capacity":
+                    config["paired_prompt_counts"].setdefault(f"{phase}:{concurrency}", point["num_prompts"])
+                    save_json(run_dir / "manifest.json", manifest)
                 point_config["num_prompts"] = point["num_prompts"]
     except (RuntimeError, subprocess.CalledProcessError, URLError, OSError) as exc:
         save_json(run_dir / f"{engine['id']}-{phase}-failure.json", {

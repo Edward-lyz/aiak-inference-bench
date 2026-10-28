@@ -18,7 +18,7 @@ The existing checkpoint is Flash, not Flash-1017. The linked page has two indepe
 1. `.github/workflows/benchmark.yml`: use masked secrets for internal configuration paths. Audit all reachable Git blobs and self-hosted Actions logs before changing repository visibility. Archive private logs locally and remove their remote copies before publication. Keep dispatch-only trusted-main self-hosted execution.
 2. `scripts/run_benchmark.py`: replace fixed TP8/no-speculation/fake-KV assumptions with explicit cookbook strategy, real Prefill for D, phase-specific DSpark validation, dataset provenance, resolved-argument checks, and native acceptance-length recording. Use native SGLang clients and their existing ShareGPT-based fixed-length random dataset; mount a pinned local dataset file.
 3. `scripts/summarize.py`, `schemas/summary.schema.json`: include protocol/strategy/dataset/DSpark/cache metadata in comparison identity. P primary metric is input tok/s; D primary metric is native mean TPOT (lower is better), with E2E output throughput retained separately. Never describe a real-prefill E2E throughput as isolated Decode throughput.
-4. `web/index.html`, `web/app.js`, `README.md`: display the actual strategy, speculation, KV, cache and primary metric. Remove hardcoded “MTP off” and synthetic-KV labels. D charts/ranking use TPOT, with per-request speed derived from TPOT explicitly labeled.
+4. `web/index.html`, `web/app.js`, `README.md`: display the actual strategy, speculation, KV, cache and primary metric. Remove hardcoded “MTP off” and synthetic-KV labels. D charts/ranking use TPOT and explicitly label E2E throughput as auxiliary.
 5. `tests/test_summary.py`, `configs/benchmark.example.json`: verify new metric direction, protocol separation, DSpark metadata and qualification. Keep raw native results internal.
 6. Ignored local configs: fresh protocol `sglang-cookbook-v2`; P output1, D output512; fixed input lengths remain explicit. Disable prefix reuse as a recorded cold-cache benchmark condition. Use the official recipe's GPU count and defaults; record any checkpoint/image or native-client adaptation.
 
@@ -32,8 +32,9 @@ The existing checkpoint is Flash, not Flash-1017. The linked page has two indepe
 ## Risks
 
 - DSpark acceptance depends on the prompt corpus. ShareGPT prompts repeated/truncated to a fixed length are a synthetic benchmark workload, not production agent traces; record this recipe and do not infer universal latency.
+- Adaptive request counts must not give the two engines different prompt subsets. The first engine calibrates each phase/concurrency once; all subsequent repetitions and the other engine reuse that count and seed. If another engine's fixed-count window is too short, leave it unqualified and rerun both with a larger common count. Never merge repetitions with different request counts.
 - Real Prefill changes E2E duration. D must be evaluated from the native TPOT metric, not an assumed acceptance multiplier or fake KV.
 - Existing images may lack cookbook flags or contain release bugs. Keep hotfix identity explicit.
 - Shared GPU interference can invalidate a repeat. Retain failures and do not silently qualify interrupted groups.
-- Shared-host cleanup has removed a required local hotfix image between phases. Keep selected images referenced by temporary CPU-only Docker containers during a run, remove these containers in the run's `finally`, and retain an exact orchestrator source snapshot beside the manifest.
+- A required local hotfix image reference was missing during startup. Keep selected images referenced by temporary CPU-only Docker containers during a run, remove these containers in the run's `finally`, and retain an exact orchestrator source snapshot beside the manifest.
 - Public repositories do not remove all Actions limits. Self-hosted compute is already free; standard GitHub-hosted public runs are free, subject to concurrency and other service limits.
