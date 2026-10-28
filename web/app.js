@@ -61,6 +61,27 @@ function render() {
   document.querySelector("#measurement-mode").textContent = visiblePoints[0]?.measurement_basis === "native-full-run"
     ? "完整计时" : visiblePoints.length ? "连续稳态" : "—";
   const latestSeries = report.series.filter(series => series.comparison_key === controls.comparison.value && series.run_id === controls.run.value);
+  const versionRows = document.querySelector("#version-rows");
+  versionRows.replaceChildren();
+  const versionLabels = {};
+  for (const engine of Object.keys(names)) {
+    const point = visiblePoints.find(point => point.engine === engine);
+    if (!point) continue;
+    const nightly = point.engine_version_relation === "release-branch-diverged";
+    versionLabels[engine] = point.engine_version
+      ? `${point.engine_version}${nightly ? " 分支基线 · nightly" : ""}`
+      : "发行版本待核对";
+    const relation = !point.engine_version_relation ? "待核对" : nightly
+      ? `分支点后 ${point.engine_release_ahead} commits；release 独有 ${point.engine_release_behind} commits`
+      : point.engine_variant !== "unmodified"
+        ? `${point.engine_variant} · 基础 ${point.engine_base_sha?.slice(0, 10) || "待核对"}`
+        : "原始发行镜像";
+    const row = document.createElement("tr");
+    for (const value of [names[engine], versionLabels[engine], point.engine_sha.slice(0, 10), relation]) {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    }
+    versionRows.append(row);
+  }
   const aiakVariant = visiblePoints.find(point => point.engine === "aiak")?.engine_variant;
   const aiakLabel = aiakVariant && aiakVariant !== "unmodified" ? "AIAK Hotfix" : "AIAK";
   const bestLabel = latency ? "最低合格 TPOT" : "合格峰值";
@@ -102,7 +123,8 @@ function render() {
     const engineCell = document.createElement("td");
     engineCell.textContent = names[point.engine] || point.engine;
     row.append(engineCell);
-    const version = document.createElement("td"); version.className = "version"; version.textContent = point.engine_sha.slice(0, 10);
+    const version = document.createElement("td"); version.className = "version";
+    version.textContent = `${point.engine_version || "版本待核对"}${point.engine_version_relation === "release-branch-diverged" ? " nightly" : ""} + ${point.engine_sha.slice(0, 10)}`;
     if (point.engine_variant && point.engine_variant !== "unmodified") {
       version.textContent += ` · ${point.engine_variant}`;
     }
@@ -160,7 +182,24 @@ async function loadReport() {
     const response = await fetch("./data/summary.json", { cache: "no-store" });
     if (response.status === 404) { render(); return; }
     if (!response.ok) throw new Error(`读取结果失败：HTTP ${response.status}`);
-    acceptReport(await response.json());
+    const payload = await response.json();
+    // A running older exporter can publish new measurements before it supports version fields.
+    const versionsResponse = await fetch("./data/versions.json", { cache: "no-store" });
+    if (versionsResponse.ok) {
+      const versions = await versionsResponse.json();
+      for (const point of [...payload.points, ...payload.series]) {
+        const identity = versions[point.run_id]?.[point.engine];
+        if (!identity) continue;
+        if (identity.engine_sha !== point.engine_sha) throw new Error("版本信息与运行 Commit 不一致");
+        for (const key of ["engine_version", "engine_package_version", "engine_version_relation",
+          "engine_base_sha", "engine_release_ahead", "engine_release_behind"]) {
+          point[key] = identity[key];
+        }
+      }
+    } else if (versionsResponse.status !== 404) {
+      throw new Error(`读取版本信息失败：HTTP ${versionsResponse.status}`);
+    }
+    acceptReport(payload);
   } catch (error) {
     document.querySelector("#error").textContent = error.message;
     document.querySelector("#error").hidden = false;
@@ -181,7 +220,7 @@ document.querySelector("#refresh").addEventListener("click", loadReport);
 document.querySelector("#method-button").addEventListener("click", () => document.querySelector("#method-dialog").showModal());
 document.querySelector("#download").addEventListener("click", () => download(JSON.stringify(report, null, 2), "summary.json", "application/json"));
 document.querySelector("#download-csv").addEventListener("click", () => {
-  const columns = ["run_id", "engine", "engine_sha", "engine_variant", "model", "phase", "profile", "protocol_id", "strategy", "speculative_algorithm", "dataset_sha256", "measurement_basis", "input_length", "concurrency", "num_prompts", "repetition", "status", "stable", "metric_name", "metric_value", "throughput", "duration", "ttft_ms", "tpot_ms", "p99_tpot_ms", "accept_length"];
+  const columns = ["run_id", "engine", "engine_version", "engine_sha", "engine_variant", "engine_package_version", "engine_version_relation", "engine_base_sha", "engine_release_ahead", "engine_release_behind", "model", "phase", "profile", "protocol_id", "strategy", "speculative_algorithm", "dataset_sha256", "measurement_basis", "input_length", "concurrency", "num_prompts", "repetition", "status", "stable", "metric_name", "metric_value", "throughput", "duration", "ttft_ms", "tpot_ms", "p99_tpot_ms", "accept_length"];
   const csv = [columns, ...visiblePoints.map(point => columns.map(key => point[key] ?? ""))]
     .map(row => row.map(value => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`).join(",")).join("\r\n");
   download("\uFEFF" + csv, "points.csv", "text/csv;charset=utf-8");

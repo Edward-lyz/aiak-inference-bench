@@ -210,6 +210,44 @@
             "number",
             "null"
           ]
+        },
+        "engine_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_package_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_version_relation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_base_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_release_ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "engine_release_behind": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
         }
       }
     },
@@ -292,6 +330,44 @@
             "number",
             "null"
           ]
+        },
+        "engine_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_package_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_version_relation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_base_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_release_ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "engine_release_behind": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
         }
       }
     }

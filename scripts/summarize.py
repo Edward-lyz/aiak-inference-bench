@@ -16,6 +16,17 @@ def build_summary(source: Path, destination: Path) -> dict:
     points = []
     groups = defaultdict(list)
     failed_groups = set()
+    identities_by_run = {}
+    for manifest_path in source.glob("*/manifest.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        identities = {identity["id"]: identity for identity in manifest["engines"].values()}
+        sidecar = manifest_path.with_name("image-identities.json")
+        if sidecar.exists():
+            for image_id, verified in json.loads(sidecar.read_text(encoding="utf-8")).items():
+                if image_id not in identities or verified["source_sha"] != identities[image_id]["source_sha"]:
+                    raise ValueError(f"Version sidecar does not match manifest: {manifest_path.parent.name}")
+                identities[image_id] = {**identities[image_id], **verified}
+        identities_by_run[manifest_path.parent.name] = identities
     for point_file in sorted(source.glob("*/*/point.json")):
         point = json.loads(point_file.read_text(encoding="utf-8"))
         key_fields = {
@@ -23,7 +34,7 @@ def build_summary(source: Path, destination: Path) -> dict:
                 "model", "model_revision", "model_config_sha256", "precision",
                 "phase", "measurement_mode", "fake_kv", "fake_ep", "mtp", "cache_mode",
                 "profile", "input_length", "output_length", "gpu_count", "hardware",
-                "seed", "server_args", "client_image_id",
+                "seed", "client_image_id",
             )
         }
         key_fields.update({key: point.get(key) for key in (
@@ -39,6 +50,18 @@ def build_summary(source: Path, destination: Path) -> dict:
         public["dataset"] = point.get("dataset")
         public["num_prompts"] = point.get("num_prompts")
         public["engine_variant"] = point.get("engine_variant", "unmodified")
+        identity = identities_by_run.get(point["run_id"], {}).get(point.get("image_id"), {})
+        if identity and identity["source_sha"] != point["engine_sha"]:
+            raise ValueError(f"Point source does not match image identity: {point_file.parent.name}")
+        provenance = identity.get("version_provenance", {})
+        public.update(
+            engine_version=provenance.get("version"),
+            engine_package_version=identity.get("package_version"),
+            engine_version_relation=provenance.get("relation"),
+            engine_base_sha=provenance.get("base_source_sha"),
+            engine_release_ahead=provenance.get("ahead_by"),
+            engine_release_behind=provenance.get("behind_by"),
+        )
         public["measurement_basis"] = point.get("measurement_basis", "native-steady-interval")
         public.update({key: point.get(key) for key in (
             "protocol_id", "strategy", "speculative_algorithm", "speculative_block_size", "dataset_sha256",
@@ -99,6 +122,8 @@ def build_summary(source: Path, destination: Path) -> dict:
             **{key: representative[key] for key in (
                 "model", "model_revision", "phase", "profile", "input_length", "output_length",
                 "measurement_mode", "measurement_basis", "precision", "gpu_count", "engine_sha", "engine_variant",
+                "engine_version", "engine_package_version", "engine_version_relation", "engine_base_sha",
+                "engine_release_ahead", "engine_release_behind",
                 "protocol_id", "strategy", "speculative_algorithm", "speculative_block_size", "dataset_sha256",
                 "metric_name", "metric_unit", "lower_is_better", "fake_kv", "fake_ep", "cache_mode",
             )},

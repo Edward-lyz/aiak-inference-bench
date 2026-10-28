@@ -46,6 +46,34 @@ class SummaryTests(unittest.TestCase):
         self.assertTrue(report["series"][0]["stable"])
         self.assertEqual(report["series"][0]["throughput"], 100)
 
+    def test_verified_version_sidecar_exports_without_changing_measurements(self) -> None:
+        self.point["image_id"] = "sha256:fixture"
+        original = self.write_repetitions([99, 100, 101])
+        run = self.root / "test-run"
+        identity = {"id": "sha256:fixture", "source_sha": "a" * 40}
+        (run / "manifest.json").write_text(json.dumps({"engines": {"community": identity}}))
+        verified = {
+            **identity, "package_version": "0.0.0.dev1",
+            "version_provenance": {"version": "0.5.22", "relation": "release-branch-diverged",
+                                   "ahead_by": 973, "behind_by": 2, "base_source_sha": "b" * 40},
+        }
+        (run / "image-identities.json").write_text(json.dumps({"sha256:fixture": verified}))
+        report = summarize.build_summary(self.root, self.root / "summary.json")
+        self.assertEqual(report["series"][0]["engine_version"], "0.5.22")
+        self.assertEqual(report["points"][0]["engine_release_behind"], 2)
+        self.assertEqual(report["series"][0]["comparison_key"], original["series"][0]["comparison_key"])
+        self.assertEqual(report["series"][0]["metric_value"], original["series"][0]["metric_value"])
+        self.assertTrue(report["series"][0]["stable"])
+        verified["source_sha"] = "c" * 40
+        (run / "image-identities.json").write_text(json.dumps({"sha256:fixture": verified}))
+        with self.assertRaisesRegex(ValueError, "Version sidecar does not match"):
+            summarize.build_summary(self.root, self.root / "summary.json")
+
+    def test_missing_release_version_is_explicit(self) -> None:
+        report = self.write_repetitions([100] * 3)
+        self.assertIsNone(report["points"][0]["engine_version"])
+        self.assertIsNone(report["series"][0]["engine_version_relation"])
+
     def test_short_runs_and_smoke_do_not_qualify(self) -> None:
         self.point["steady"]["duration"] = 119
         self.assertFalse(self.write_repetitions([100] * 3)["series"][0]["stable"])

@@ -4,6 +4,10 @@ Compare community SGLang and aiak_sglang using the official SGLang cookbook stra
 
 The code repository is public. Configuration, datasets, raw evidence, results and the dashboard stay internal. All measurements predating the `sglang-cookbook-v2` reset on 2026-10-28 are retired and excluded from current comparisons. See [COOKBOOK_PLAN.md](COOKBOOK_PLAN.md).
 
+The dashboard shows the numbered release or verified release branch baseline, source commit and any local hotfix separately. Installed package versions such as `0.0.0` are retained as packaging evidence, not presented as a release number. A nightly diverging from a release branch shows its shared branch point and ahead/behind counts; it is not labeled as the exact release. AIAK release provenance retains the original image digest and base source before a hotfix.
+
+For known images, `image_version_provenance` maps immutable image IDs to verified release metadata, including the matching `source_sha`. Existing runs may add `image-identities.json` beside their manifest, keyed by those same image IDs. The summarizer checks image/source agreement and leaves original measurements unchanged. Missing release provenance is displayed as pending verification; upgrading a nightly never inherits another image's release metadata.
+
 ## Run
 
 Use Python 3.10+, Docker with NVIDIA support, and a GPU host with a coordinated exclusive window. Default runs refuse foreign GPU compute processes and check for interference every five seconds. An explicitly authorized root run may supply `--terminate-foreign-gpu-processes`; native Linux pidfds target the observed GPU processes without PID-reuse ambiguity. An overlapping measurement is invalidated even when the interfering process is removed.

@@ -75,6 +75,12 @@ def validate_config(config: dict) -> None:
             raise ValueError("Each engine needs an image")
         if any("speculative" in arg or "ep-dispatch-algorithm" in arg for arg in engine.get("extra_args", [])):
             raise ValueError("Engine overrides cannot change the shared speculation/routing recipe")
+    for engine in config["engines"]:
+        for args in engine.get("launch_args", {}).values():
+            if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+                raise ValueError("launch_args must be arrays of strings")
+            if any("disaggregation" in arg or "language-only" in arg for arg in args):
+                raise ValueError("launch_args must describe a single real-Prefill instance")
     for args in [config["server_args"], *config["phase_args"].values()]:
         if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
             raise ValueError("Server arguments must be arrays of strings")
@@ -105,7 +111,14 @@ def image_identity(image: str) -> dict:
         "docker", "run", "--rm", "--entrypoint", "git", details["Id"],
         "-C", "/sgl-workspace/sglang", "rev-parse", "HEAD",
     ], text=True).strip()
-    return {"reference": image, "id": details["Id"], "repo_digests": details["RepoDigests"], "source_sha": source}
+    package_version = subprocess.check_output([
+        "docker", "run", "--rm", "--network", "none",
+        "-e", "NVIDIA_VISIBLE_DEVICES=void", "-e", "CUDA_VISIBLE_DEVICES=",
+        "--entrypoint", "python3", details["Id"], "-c",
+        "import importlib.metadata; print(importlib.metadata.version('sglang'))",
+    ], text=True).strip()
+    return {"reference": image, "id": details["Id"], "repo_digests": details["RepoDigests"],
+            "source_sha": source, "package_version": package_version}
 
 
 def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool = False,
@@ -181,7 +194,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
         "dataset": "sharegpt-repeat-truncate", "tokenized_prompt": True, "random_range_ratio": 1.0,
         "measurement_basis": "native-full-run",
         "min_measurement_seconds": config["min_measurement_seconds"], "max_cv": config["max_cv"],
-        "server_args": config["server_args"] + config["phase_args"][phase],
+        "server_args": engine_args(config, engine, phase),
     }
     save_json(point_dir / "point.json", point)
     command = [
@@ -290,6 +303,13 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
     return point
 
 
+def engine_args(config: dict, engine: dict, phase: str) -> list[str]:
+    release = engine.get("launch_args", {}).get(phase)
+    if release is not None:
+        return release
+    return [*config["server_args"], *config["phase_args"][phase], *engine.get("extra_args", [])]
+
+
 def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
                profile: str, manifest: dict) -> bool:
     name = f"aiak-bench-server-{run_dir.name}-{engine['id']}-{phase.lower()}"
@@ -306,13 +326,13 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         cache_dir = Path(config["cache_root"], engine["id"])
         cache_dir.mkdir(parents=True, exist_ok=True)
         command.extend(["-v", f"{cache_dir}:/root/.cache"])
-    for key, value in engine.get("env", {}).items():
+    for key, value in {**engine.get("env", {}), **engine.get("launch_env", {}).get(phase, {})}.items():
         command.extend(["-e", f"{key}={value}"])
     command.extend([
         "--entrypoint", "python3", manifest["engines"][engine["id"]]["id"],
         "-m", "sglang.launch_server", "--model-path", "/model",
         "--served-model-name", config["model_name"], "--host", "127.0.0.1", "--port", str(config["port"]),
-        *config["server_args"], *config["phase_args"][phase], *engine.get("extra_args", []),
+        *engine_args(config, engine, phase),
     ])
     save_json(run_dir / f"{engine['id']}-{phase}-launch.json", {"argv": command})
     print(f"Starting {name}", flush=True)
@@ -339,7 +359,8 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
             server_info = json.load(response)
         save_json(run_dir / f"{engine['id']}-{phase}-server-info.json", server_info)
         resolved = server_info.get("server_args", server_info)
-        expected_speculation = "DSPARK" if phase == "D" else None
+        launch = engine_args(config, engine, phase)
+        expected_speculation = "DSPARK" if "--speculative-algorithm" in launch or phase == "D" else None
         if resolved.get("speculative_algorithm") != expected_speculation:
             raise RuntimeError("Resolved speculative algorithm differs from the cookbook recipe")
         if resolved.get("tp_size") != len(config["gpu_ids"]) or resolved.get("ep_size") != len(config["gpu_ids"]):
@@ -508,6 +529,13 @@ def main() -> None:
             "orchestrator_sha256": hashlib.sha256(orchestrator_source).hexdigest(),
             "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         }
+        provenance = config.get("image_version_provenance", {})
+        for identity in [manifest["client"], *manifest["engines"].values()]:
+            verified = provenance.get(identity["id"])
+            if verified:
+                if verified["source_sha"] != identity["source_sha"]:
+                    raise ValueError("Version provenance does not match the selected image source")
+                identity["version_provenance"] = verified
         save_json(run_dir / "manifest.json", manifest)
         def stop_on_signal(signum: int, frame: object) -> None:
             raise KeyboardInterrupt(f"Received signal {signum}; cleaning this run's containers")
