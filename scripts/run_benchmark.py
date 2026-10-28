@@ -132,7 +132,7 @@ def run_point(config: dict, engine: dict, phase: str, concurrency: int, repetiti
     point_dir = run_dir / f"{engine['id']}-{phase}-c{concurrency}-r{repetition}"
     point_dir.mkdir()
     client_name = f"aiak-bench-client-{run_dir.name}-{engine['id']}-{phase.lower()}-{concurrency}-{repetition}"
-    prompts = config["num_prompts"] if profile == "smoke" else max(config["num_prompts"], 8 * concurrency)
+    prompts = config["num_prompts"] if profile == "smoke" else max(config["num_prompts"], 4 * concurrency)
     point = {
         "schema_version": 1, "run_id": run_dir.name, "timestamp": datetime.now(timezone.utc).isoformat(),
         "engine": engine["id"], "engine_sha": manifest["engines"][engine["id"]]["source_sha"],

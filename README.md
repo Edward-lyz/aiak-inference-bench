@@ -40,6 +40,8 @@ The pinned native client uses `random-ids`, `--tokenize-prompt` and `--random-ra
 
 Capacity measurements increase the native request count when a full timed measurement is shorter than the qualification threshold, targeting 150 seconds for a 120-second minimum, with at most three attempts per repetition. All native attempts are retained, and subsequent repetitions reuse the chosen request count. Short full measurements still remain unqualified. The sweep covers only `concurrencies` in the config. The dashboard never claims a global maximum, and compares peaks only within one comparison group and run. Hardware, model revision/config hash, precision, dataset recipe, workload, client image and shared launch arguments are part of the comparison key.
 
+Initial capacity request count is at least four times concurrency. This limits expensive long-input Prefill runs while preserving the measured ≥80% average-concurrency gate; adaptive timing can increase the count further.
+
 Results retain full-run throughput, native steady-state throughput, TTFT, TPOT, all repetitions and failures. Failed points are not represented as zero. Server failures are also retained. Each point has the exact argv and original native client output in its internal evidence directory.
 
 ## Dashboard
