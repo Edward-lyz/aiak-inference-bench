@@ -79,7 +79,7 @@ def validate_config(config: dict) -> None:
         for args in engine.get("launch_args", {}).values():
             if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
                 raise ValueError("launch_args must be arrays of strings")
-            if any("disaggregation" in arg or "language-only" in arg for arg in args):
+            if any("disaggregation" in arg for arg in args):
                 raise ValueError("launch_args must describe a single real-Prefill instance")
     for args in [config["server_args"], *config["phase_args"].values()]:
         if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
@@ -130,6 +130,13 @@ def check_gpu_ownership(server_name: str | None = None, terminate_foreign: bool 
     owned_pids = set()
     if server_name:
         owned_pids = set(subprocess.check_output(["docker", "top", server_name, "-eo", "pid"], text=True).split()[1:])
+        container_id = subprocess.check_output(["docker", "inspect", "-f", "{{.Id}}", server_name], text=True).strip()
+        for pid in active_pids - owned_pids:
+            try:
+                if container_id in Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8"):
+                    owned_pids.add(pid)  # Worker spawned after the docker top snapshot.
+            except OSError:
+                continue
     foreign_pids = active_pids - owned_pids
     if foreign_pids and not terminate_foreign:
         raise RuntimeError(f"External GPU compute processes present: {sorted(foreign_pids)}")
