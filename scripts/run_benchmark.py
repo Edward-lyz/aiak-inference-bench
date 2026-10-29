@@ -370,8 +370,11 @@ def run_server(config: dict, engine: dict, phase: str, run_dir: Path,
         expected_speculation = "DSPARK" if "--speculative-algorithm" in launch or phase == "D" else None
         if resolved.get("speculative_algorithm") != expected_speculation:
             raise RuntimeError("Resolved speculative algorithm differs from the cookbook recipe")
-        if resolved.get("tp_size") != len(config["gpu_ids"]) or resolved.get("ep_size") != len(config["gpu_ids"]):
-            raise RuntimeError("Resolved TP/EP topology differs from the cookbook GPU allocation")
+        def launched_size(flag: str) -> int:
+            return int(launch[launch.index(flag) + 1]) if flag in launch else len(config["gpu_ids"])
+
+        if resolved.get("tp_size") != launched_size("--tp-size") or resolved.get("ep_size") != launched_size("--ep-size"):
+            raise RuntimeError("Resolved TP/EP topology differs from the launch recipe")
         if phase == "D" and resolved.get("speculative_dspark_block_size") != 5:
             raise RuntimeError("Resolved DSpark block size differs from the cookbook recipe")
         config.setdefault("paired_prompt_counts", {})

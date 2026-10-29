@@ -10,6 +10,7 @@ const names = { community: "Community SGLang", aiak: "AIAK SGLang" };
 let report = { schema_version: 1, points: [], series: [], failures: [] };
 let phase = "P";
 let visiblePoints = [];
+let launchConfig = {};
 const controls = Object.fromEntries(["model", "context", "profile", "comparison", "run"].map(id => [id, document.getElementById(id)]));
 const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
@@ -141,6 +142,7 @@ function render() {
     row.append(runCell);
     rows.append(row);
   }
+  renderLaunch();
   document.querySelector("#point-count").textContent = visiblePoints.length;
   document.querySelector("#table-empty").hidden = visiblePoints.length > 0;
   const failures = report.failures.filter(failure => failure.phase === phase);
@@ -154,6 +156,35 @@ function render() {
     }
     failureRows.append(row);
   }
+}
+
+function renderLaunch() {
+  const grid = document.querySelector("#launch-grid");
+  grid.replaceChildren();
+  document.querySelector("#launch-phase").textContent = phase === "P" ? "Prefill" : "Decode";
+  for (const engine of Object.keys(names)) {
+    const entry = launchConfig[controls.run.value]?.[engine];
+    const launch = entry?.phases?.[phase];
+    if (!launch || !visiblePoints.some(point => point.engine === engine)) continue;
+    const card = document.createElement("article"); card.className = "launch-card";
+    const title = document.createElement("h3"); title.textContent = names[engine];
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = `${entry.gpu_count} GPU · 镜像 ${String(entry.image).replace("sha256:", "").slice(0, 12)}`;
+    const commandTitle = document.createElement("h4"); commandTitle.textContent = "启动命令";
+    const command = document.createElement("pre");
+    const args = [];
+    for (const arg of launch.args) {
+      if (arg.startsWith("--") || !args.length) args.push(arg); else args[args.length - 1] += ` ${arg}`;
+    }
+    command.textContent = ["sglang serve --model-path <模型>", ...args].join(" \\\n  ");
+    const envTitle = document.createElement("h4"); envTitle.textContent = "环境变量";
+    const env = document.createElement("pre");
+    const entries = Object.entries(launch.env);
+    env.textContent = entries.length ? entries.map(([key, value]) => `${key}=${value}`).join("\n") : "（无额外环境变量）";
+    card.append(title, meta, commandTitle, command, envTitle, env);
+    grid.append(card);
+  }
+  document.querySelector("#launch-empty").hidden = grid.children.length > 0;
 }
 
 function acceptReport(payload) {
@@ -199,6 +230,8 @@ async function loadReport() {
     } else if (versionsResponse.status !== 404) {
       throw new Error(`读取版本信息失败：HTTP ${versionsResponse.status}`);
     }
+    const launchResponse = await fetch("./data/launch-config.json", { cache: "no-store" });
+    launchConfig = launchResponse.ok ? await launchResponse.json() : {};
     acceptReport(payload);
   } catch (error) {
     document.querySelector("#error").textContent = error.message;

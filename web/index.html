@@ -35,6 +35,11 @@
       <div id="chart" aria-label="并发与吞吐曲线"></div>
       <div id="empty" class="empty-chart">暂无测试结果</div>
     </section>
+    <section class="launch-panel" aria-label="启动配置">
+      <div class="panel-heading"><h2>启动配置 <span id="launch-phase">Prefill</span></h2></div>
+      <div class="launch-grid" id="launch-grid"></div>
+      <div class="table-empty" id="launch-empty">该运行未记录启动参数</div>
+    </section>
     <section class="table-panel">
       <div class="panel-heading"><h2>测试明细 <span id="point-count">0</span></h2><button id="download-csv">导出 CSV ↗</button></div>
       <div class="table-scroll"><table><thead><tr><th>引擎</th><th>版本</th><th>并发</th><th>请求数</th><th id="throughput-heading">输入吞吐 (tok/s)</th><th>测量 (s)</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>原生平均接受长度</th><th>状态</th><th>重复</th></tr></thead><tbody id="rows"></tbody></table></div>
